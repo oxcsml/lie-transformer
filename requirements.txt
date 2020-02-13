@@ -1,0 +1,8 @@
+tensorflow==1.14
+torch
+torchvision
+numpy
+attrdict
+simplejson
+future
+deepdish
