@@ -116,3 +116,6 @@ data
 checkpoints
 
 ckpt.store
+
+# vscode
+.vscode
