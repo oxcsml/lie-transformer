@@ -1,44 +1,99 @@
+import sys
+
 import torch
 import torch.nn as nn
 import torch.functional as F
 
-from eqv_transformer.utils import Expression, export, Named
+from eqv_transformer.utils import Expression, export, Named, LinearBNact, Pass
 
 
-def KernelNet(in_dim, out_dim, hid_dim=32, act="ReLU", bn=True):
-    return nn.Sequential(nn.Linear(in_dim, out_dim))
+class ReshapeFinalDim(nn.Module):
+    """ Reshapes the final dimension into multiple dimensions
+    """
+
+    def __init__(self, new_dims):
+        super().__init__()
+        self.new_dims = new_dims
+
+    def forward(self, x):
+        return x.unsqueeze(-1).reshape(*x.shape[:-1], *self.new_dims)
+
+
+class GlobalPool(nn.Module):
+    """computes values reduced over all spatial locations in the mask
+        Adapted from https://github.com/mfinzi/LieConv/
+    """
+
+    def __init__(self, mean=False):
+        super().__init__()
+        self.mean = mean
+
+    def forward(self, x):
+        """x [xyz (bs,n,ns,d), vals (bs,n,ns,c), mask (bs,n,ns)]"""
+        if len(x) == 2:
+            return x[1].mean(dim=(1, 2))
+        coords, vals, mask = x
+        summed = torch.where(mask.unsqueeze(-1), vals, torch.zeros_like(vals)).sum(
+            dim=(1, 2)
+        )
+        if self.mean:
+            summed /= mask.sum(-1).unsqueeze(-1)
+        return summed
+
+
+def NerualNetKernel(in_dim, out_dim, hid_dim=32, act="ReLU", bn=True):
+    # Repuropsed from https://github.com/mfinzi/LieConv/
+    return nn.Sequential(
+        *LinearBNact(in_dim, hid_dim, act=act, bn=bn),
+        *LinearBNact(hid_dim, hid_dim, act=act, bn=bn),
+        *LinearBNact(hid_dim, out_dim, act=act, bn=bn),
+    )
 
 
 class SumKernel(nn.Module):
     def __init__(self, y_dim, g_dim, out_dim, hid_dim=32, act="ReLU", bn=True):
+        # TODO: add options for different g and y kernels
         super().__init__()
-        self.k_y = KernelNet(
+        self.k_y = NerualNetKernel(
             in_dim=2 * y_dim, out_dim=1, hid_dim=hid_dim, act=act, bn=bn
         )
 
-        self.k_g = KernelNet(in_dim=g_dim, out_dim=1, hid_dim=hid_dim, act=act, bn=bn)
+        self.k_g = NerualNetKernel(
+            in_dim=g_dim, out_dim=1, hid_dim=hid_dim, act=act, bn=bn
+        )
 
-    def forward(self, y, pairwise_g):
+    def forward(self, pairwise_g, coset_functions, mask):
         """Computes the forward pass of the attention kernel.
         
         Parameters
         ----------
-        y : torch.Tensor
-            Tensor of shape (batch_size, num_points, num_samples, y_dim).
-            Represents the values of the functions over cosets at a given point.
         pairwise_g : torch.Tensor
             Tensor of shape (batch_size, num_points, num_points, num_samples, num_samples, g_embed_dim + q_embed_dim + q_embed_dim).
             Precomputed pairwise differences between elements of the cosets.
+        coset_functions : torch.Tensor
+            Tensor of shape (batch_size, num_points, num_samples, y_dim).
+            Represents the values of the functions over cosets at a given point.
+        mask : torch.Tensor
+            Tensor of dims (batch_size, num_points, coset_samples).
+            Mask of points not included in each batch.
         
         Returns
         -------
         torch.Tensor
-            Tensor of shape (batch_size, num_points, num_points, num_samples, num_samples, g_embed_dim + q_embed_dim + q_embed_dim)
+            Tensor of shape (batch_size, num_points, num_points, num_samples, num_samples)
         """
 
-        # Expand the y's along the correct dimensions - omitting final dim as y's are split along this
-        y_1 = y.unsqueeze(1).unsqueeze(3).expand(*pairwise_g.shape[:-1], y.shape[-1])
-        y_2 = y.unsqueeze(2).unsqueeze(4).expand(*pairwise_g.shape[:-1], y.shape[-1])
+        # Expand the coset_functions's along the correct dimensions
+        y_1 = (
+            coset_functions.unsqueeze(1)
+            .unsqueeze(3)
+            .expand(*pairwise_g.shape[:-1], coset_functions.shape[-1])
+        )
+        y_2 = (
+            coset_functions.unsqueeze(2)
+            .unsqueeze(4)
+            .expand(*pairwise_g.shape[:-1], coset_functions.shape[-1])
+        )
 
         # Concatenate to get pairs of y values.
         y = torch.cat([y_1, y_2], dim=-1)
@@ -93,7 +148,9 @@ class Embed(nn.Module):
 
 @export
 class EquivariantMultiheadAttention(nn.Module):
-    def __init__(self, c_in, c_out, group, nbhd=32):
+    def __init__(
+        self, c_in, c_out, group, nbhd=32, act="Swish", bn=False, mlp_transforms=False
+    ):
         super().__init__()
 
         self.c_in = c_in
@@ -101,11 +158,28 @@ class EquivariantMultiheadAttention(nn.Module):
         self.group = group()
 
         self.kernels = [
-            SumKernel(1, self.group.g_embed_dim + 2 * self.group.q_embed_dim, 1)
+            SumKernel(
+                1,
+                self.group.g_embed_dim + 2 * self.group.q_embed_dim,
+                1,
+                act=act,
+                bn=bn,
+            )
             for i in range(self.c_in)
         ]
 
-        self.linear = nn.Linear(self.c_in, self.c_out, bias=False)
+        if mlp_transforms:
+            self.output_transform = Pass(
+                nn.Sequential(
+                    *LinearBNact(self.c_in, self.c_out, act=act, bn=bn),
+                    *LinearBNact(self.c_out, self.c_out, act=act, bn=bn),
+                ),
+                dim=1,
+            )
+        else:
+            self.output_transform = Pass(
+                nn.Linear(self.c_in, self.c_out, bias=False), dim=1
+            )
 
     def forward(self, input):
         """ Forward pass for multihead equivariant attention.
@@ -142,7 +216,7 @@ class EquivariantMultiheadAttention(nn.Module):
                 -1
             )  # add the last dimension back in - for futrue proofing
             pre_softmax_attention = self.kernels[i](
-                coset_functions[i], pairwise_embedded_x
+                pairwise_embedded_x, coset_functions[i], mask
             )
 
             # Softmax the kernels
@@ -179,10 +253,76 @@ class EquivariantMultiheadAttention(nn.Module):
         # Concatenate the heads
         coset_functions = torch.cat(coset_functions, dim=-1)
 
-        # zero out the elements that are not in inculded in each batch - might not be needed
+        # zero out the elements that are not in included in each batch - might not be needed
         coset_functions = coset_functions * mask.unsqueeze(-1)
 
         # Apply the output matrix to the functions
-        coset_functions = self.linear(coset_functions)
+        output = (pairwise_embedded_x, coset_functions, mask)
 
-        return (pairwise_embedded_x, coset_functions, mask)
+        # Apply output transformation to the coset functions pointwise.
+        output = self.output_transform(output)
+
+        return output
+
+
+class SimpleEqvTransformer(nn.Module):
+    def __init__(
+        self,
+        dim_input,
+        dim_hidden,
+        dim_output,
+        n_enc_layers,
+        n_dec_layers,
+        num_outputs,
+        group,
+        coset_samples=100,
+    ):
+        super().__init__()
+
+        self.dim_input = dim_input
+        self.dim_hidden = dim_hidden
+        self.dim_output = dim_output
+        self.num_outputs = num_outputs
+        self.group = group
+
+        enc_layers = []
+
+        enc_layers.append(Embed(self.group, samples=coset_samples))
+        enc_layers.append(
+            EquivariantMultiheadAttention(dim_input, dim_hidden, group=self.group)
+        )
+        for _ in range(n_enc_layers - 1):
+            enc_layers.append(
+                EquivariantMultiheadAttention(dim_hidden, dim_hidden, group=self.group)
+            )
+        enc_layers.append(GlobalPool())
+
+        self.enc = nn.Sequential(*enc_layers)
+
+        dec_layers = []
+        dec_layers.append(
+            nn.Linear(dim_hidden, num_outputs * dim_output)
+        )  # Linear mapping from pooled features to entities
+        dec_layers.append(
+            ReshapeFinalDim((num_outputs, dim_output))
+        )  # Reshape correctly
+
+        # TODO: This is a weak decoder, and does not employ "attention" pooling like Set transformers
+
+        self.dec = nn.Sequential(*dec_layers)
+
+    def forward(self, x, mask=None):
+
+        # TODO: This is not general for all models. Hardcoded for constellations
+        if mask is None:
+            mask = torch.ones_like(x)
+
+        y = (
+            mask.unsqueeze(-1)
+            .repeat((1,) * len(mask.shape) + (self.dim_input,))
+            .float()
+        )
+
+        mask = mask.bool()
+
+        return self.dec(self.enc((x, y, mask)))

@@ -176,6 +176,8 @@ class Group(metaclass=Named):
             x, mask, samples
         )  # (bs, n, d_x), (bs, n) -> (bs, n, ns, d_g), (bs, n, ns, d_q)
 
+        samples = embedded_g.shape[-2]
+
         # Expand the values and mask as appropriate
         expanded_y = y[..., None, :].repeat(
             (1,) * len(y.shape[:-1]) + (samples, 1)
@@ -218,6 +220,8 @@ class Group(metaclass=Named):
             self.inv(embedded_g).unsqueeze(-3).unsqueeze(-2)
         )
         u = self.representation_to_action(embedded_g.unsqueeze(-4).unsqueeze(-3))
+
+        pairs = vinv @ u
 
         return self.action_to_representation(vinv @ u)
 
