@@ -62,7 +62,7 @@ class LieGroup(Group):
         Parameters
         ----------
         a : torch.Tensor
-            Tensor of shape (..., g_g_embed_dim)
+            Tensor of shape (..., g_embed_dim)
         """
         raise NotImplementedError
 
@@ -85,15 +85,13 @@ class LieGroup(Group):
         return self.exp(-self.log(g))
 
     def distance(self, abq_pairs):
-        ab_dist = norm(abq_pairs[..., : self.g_g_embed_dim], dim=-1)
-        qa = abq_pairs[
-            ..., self.g_g_embed_dim : self.g_g_embed_dim + self.q_g_embed_dim
-        ]
+        ab_dist = norm(abq_pairs[..., : self.g_embed_dim], dim=-1)
+        qa = abq_pairs[..., self.g_embed_dim : self.g_embed_dim + self.g_embed_dim]
         qb = abq_pairs[
             ...,
-            self.g_g_embed_dim
-            + self.q_g_embed_dim : self.g_g_embed_dim
-            + 2 * self.q_g_embed_dim,
+            self.g_embed_dim
+            + self.g_embed_dim : self.g_embed_dim
+            + 2 * self.g_embed_dim,
         ]
         qa_qb_dist = norm(qa - qb, dim=-1)
         return ab_dist * self.alpha + (1 - self.alpha) * qa_qb_dist
