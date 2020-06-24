@@ -57,7 +57,7 @@ def load(config, **unused_kwargs):
         for key, dataset in datasets.items()
     }
 
-    return dataloaders, num_species, charge_scale, ds_stats
+    return dataloaders, num_species, charge_scale, ds_stats, f'QM9_{config.task}'
 
 
 if __name__ == "__main__":

@@ -76,4 +76,7 @@ def load(config, **unused_kwargs):
 
     predictor = MoleculePredictor
 
-    return MoleculePredictor(encoder, task=config.task, ds_stats=config.ds_stats)
+    return (
+        MoleculePredictor(encoder, task=config.task, ds_stats=config.ds_stats),
+        f"SetTransformer",
+    )
