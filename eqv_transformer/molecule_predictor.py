@@ -48,8 +48,7 @@ class MoleculePredictor(nn.Module):
                 o.mae = o.loss
             # import pdb;
             # pdb.set_trace()
-            o.mse = (o.prediction - target).pow(2).mean()
 
-        o.reports = AttrDict({"loss": o.loss, "mse": o.mse, "mae": o.mae})
+        o.reports = AttrDict({"loss": o.loss, "mae": o.mae})
 
         return o

@@ -1,6 +1,6 @@
+import os
 import sys
 
-sys.path.append("forge")
 sys.path.append(".")
 from os import path as osp
 import time
@@ -12,10 +12,7 @@ from forge import flags
 import forge.experiment_tools as fet
 from copy import deepcopy
 import deepdish as dd
-
-print(dir(forge))
-print(forge.__path__)
-print(sys.path)
+from tqdm import tqdm
 
 from eqv_transformer.train_tools import (
     log_tensorboard,
@@ -89,24 +86,8 @@ def main():
     # Parse flags
     config = forge.config()
 
-    # Prepare environment
-    results_folder_name = (
-        config.run_name
-        + "_bs"
-        + str(config.batch_size)
-        + "_lr"
-        + str(config.learning_rate)
-    )
-
-    logdir = osp.join(config.results_dir, results_folder_name.replace(".", "_"))
-    logdir, resume_checkpoint = fet.init_checkpoint(
-        logdir, config.data_config, config.model_config, config.resume
-    )
-
-    checkpoint_name = osp.join(logdir, "model.ckpt")
-
     # Load data
-    dataloaders, num_species, charge_scale, ds_stats = fet.load(
+    dataloaders, num_species, charge_scale, ds_stats, data_name = fet.load(
         config.data_config, config=config
     )
 
@@ -115,7 +96,32 @@ def main():
     config.ds_stats = ds_stats
 
     # Load model
-    model = fet.load(config.model_config, config).to(device)
+    model, model_name = fet.load(config.model_config, config)
+    model = model.to(device)
+
+    # Prepare environment
+    results_folder_name = os.path.join(
+        "results",
+        data_name,
+        model_name,
+        (
+            config.run_name
+            + "_bs"
+            + str(config.batch_size)
+            + "_lr"
+            + str(config.learning_rate)
+        ),
+    )
+
+    config.charge_scale = float(config.charge_scale.cpu().numpy())
+    config.ds_stats = [float(s.cpu().numpy()) for s in config.ds_stats]
+
+    logdir = osp.join(config.results_dir, results_folder_name.replace(".", "_"))
+    logdir, resume_checkpoint = fet.init_checkpoint(
+        logdir, config.data_config, config.model_config, config.resume
+    )
+
+    checkpoint_name = osp.join(logdir, "model.ckpt")
 
     # Print flags
     fet.print_flags()
@@ -154,7 +160,7 @@ def main():
     if config.log_train_values:
         train_emas = ExponentialMovingAverage(alpha=config.ema_alpha, debias=True)
 
-    for epoch in range(start_epoch, config.train_epochs + 1):
+    for epoch in tqdm(range(start_epoch, config.train_epochs + 1)):
         model.train()
 
         for batch_idx, data in enumerate(dataloaders["train"]):
@@ -166,9 +172,13 @@ def main():
             model_opt.step()
 
             if config.log_train_values:
-                reports = train_emas(parse_reports(outputs.reports))
                 if batch_idx % config.report_loss_every == 0:
-                    log_tensorboard(summary_writer, train_iter, reports, "train/")
+                    reports = train_emas(parse_reports(outputs.reports))
+                    reports["time"] = time.perf_counter() - start_t
+
+                    log_tensorboard(
+                        summary_writer, train_iter, reports, "train_metrics/"
+                    )
                     print_reports(
                         reports,
                         start_t,
@@ -180,34 +190,41 @@ def main():
 
             # Logging
             if batch_idx % config.evaluate_every == 0:
-                test_mae = 0.0
-                for data in dataloaders["test"]:
-                    data = {k: v.to(device) for k, v in data.items()}
-                    outputs = model(data, compute_loss=True)
-                    test_mae = test_mae + outputs.mae
+                with torch.no_grad():
+                    test_mae = 0.0
+                    test_loss = 0.0
+                    for data in dataloaders["test"]:
+                        data = {k: v.to(device) for k, v in data.items()}
+                        outputs = model(data, compute_loss=True)
+                        test_mae += outputs.mae
+                        test_loss += outputs.loss
 
-                outputs["reports"].test_mae = test_mae / len(dataloaders["test"])
+                    reports = {}
+                    reports["test_mae"] = test_mae / len(dataloaders["test"])
+                    reports["test_loss"] = test_loss / len(dataloaders["test"])
 
-                reports = parse_reports(outputs.reports)
-                reports["time"] = time.perf_counter() - start_t
-                if report_all == {}:
-                    report_all = deepcopy(reports)
+                    reports = parse_reports(reports)
 
-                    for d in reports.keys():
-                        report_all[d] = [report_all[d]]
-                else:
-                    for d in reports.keys():
-                        report_all[d].append(reports[d])
+                    reports["time"] = time.perf_counter() - start_t
 
-                log_tensorboard(summary_writer, train_iter, reports)
-                print_reports(
-                    reports,
-                    start_t,
-                    epoch,
-                    batch_idx,
-                    len(dataloaders["train"].dataset) // config.batch_size,
-                    prefix="test",
-                )
+                    if report_all == {}:
+                        report_all = deepcopy(reports)
+
+                        for d in reports.keys():
+                            report_all[d] = [report_all[d]]
+                    else:
+                        for d in reports.keys():
+                            report_all[d].append(reports[d])
+
+                    log_tensorboard(summary_writer, train_iter, reports, "test")
+                    print_reports(
+                        reports,
+                        start_t,
+                        epoch,
+                        batch_idx,
+                        len(dataloaders["train"].dataset) // config.batch_size,
+                        prefix="test",
+                    )
 
             train_iter += 1
 
@@ -215,6 +232,33 @@ def main():
                 save_checkpoint(
                     checkpoint_name, train_iter, model, model_opt, outputs.loss
                 )
+
+        with torch.no_grad():
+            valid_mae = 0.0
+            valid_loss = 0.0
+            for data in dataloaders["valid"]:
+                data = {k: v.to(device) for k, v in data.items()}
+                outputs = model(data, compute_loss=True)
+                valid_mae += outputs.mae
+                valid_loss += outputs.loss
+
+            reports = {}
+            reports["valid_mae"] = test_mae / len(dataloaders["valid"])
+            reports["valid_loss"] = test_loss / len(dataloaders["valid"])
+
+            reports = parse_reports(reports)
+
+            reports["time"] = time.perf_counter() - start_t
+
+            log_tensorboard(summary_writer, train_iter, reports, "valid")
+            print_reports(
+                reports,
+                start_t,
+                epoch,
+                batch_idx,
+                len(dataloaders["train"].dataset) // config.batch_size,
+                prefix="valid",
+            )
 
         dd.io.save(logdir + "/results_dict.h5", report_all)
 
