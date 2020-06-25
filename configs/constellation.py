@@ -31,7 +31,7 @@ def load(config, **unused_kwargs):
 
     gen_func = functools.partial(create_constellations,
                                  shuffle_corners=config.shuffle_corners,
-                                 gaussian_noise=config.shuffle_corners,
+                                 gaussian_noise=config.corner_noise,
                                  max_rot=config.max_rotation,
                                  max_upscale=config.pattern_upscale,
                                  drop_prob=config.pattern_drop_prob,
