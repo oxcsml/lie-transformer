@@ -50,11 +50,14 @@ class MultiheadAttentionBlock(nn.Module):
 
 
 class SelfattentionBlock(nn.Module):
-    def __init__(self, dim_in, dim_out, num_heads, ln=False):
+    def __init__(self, dim_in, dim_out, num_heads, ln=False, return_presence=False):
         super(SelfattentionBlock, self).__init__()
         self.mab = MultiheadAttentionBlock(dim_in, dim_in, dim_out, num_heads, ln=ln)
+        self.return_presence = return_presence
 
     def forward(self, X, presence=None):
+        if self.return_presence:
+            return self.mab(X, X, presence_q=presence, presence_k=presence), presence
         return self.mab(X, X, presence_q=presence, presence_k=presence)
 
 
@@ -123,9 +126,9 @@ class SetTransformer(nn.Module):
         else:
             enc_layer_class = SelfattentionBlock
 
-        enc_layers = [InputWrapper(enc_layer_class(dim_input, dim_hidden, num_heads, ln=ln))]
+        enc_layers = [InputWrapper(enc_layer_class(dim_input, dim_hidden, num_heads, ln=ln, return_presence=True))]
         for _ in range(n_enc_layers - 1):
-            enc_layers.append(InputWrapper(enc_layer_class(dim_hidden, dim_hidden, num_heads, ln=ln)))
+            enc_layers.append(InputWrapper(enc_layer_class(dim_hidden, dim_hidden, num_heads, ln=ln, return_presence=True)))
 
         self.enc = nn.Sequential(*enc_layers)
         # self.enc = enc_layers[0]
@@ -139,4 +142,4 @@ class SetTransformer(nn.Module):
         # self.dec = dec_layers[0]
 
     def forward(self, X, presence=None):
-        return self.dec([self.enc([X, presence]), presence])
+        return self.dec(self.enc([X, presence]))
