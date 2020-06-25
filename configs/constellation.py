@@ -13,9 +13,12 @@ flags.DEFINE_float('corner_noise', .1, 'See `create_constellations`.')
 flags.DEFINE_boolean('shuffle_corners', True, 'See `create_constellations`.')
 
 flags.DEFINE_float('pattern_upscale', 0., 'See `create_constellations`.')
-flags.DEFINE_float('max_rotation', .33, 'See `create_constellations`.')
+flags.DEFINE_float('max_rotation_train', .33, 'See `create_constellations`.')
 flags.DEFINE_float('pattern_drop_prob', .5, 'See `create_constellations`.')
-flags.DEFINE_string('patterns', 'square,square,triangle,triangle,pentagon,pentagon,L,L', 'See `create_constellations`.')
+flags.DEFINE_string('patterns_train', 'square,square,triangle,triangle,pentagon,pentagon,L,L', 'See `create_constellations`.')
+
+flags.DEFINE_float('max_rotation_test', .33, 'See `create_constellations`.')
+flags.DEFINE_string('patterns_test', 'square,square,triangle,triangle,pentagon,pentagon,L,L', 'See `create_constellations`.')
 
 PATTERNS = {
     'square': [[1 + 2, 1 + 2, 1], [1, 1, 1], [1 + 2, 1, 1], [1, 1 + 2, 1]],
@@ -29,29 +32,40 @@ PATTERNS = {k: np.asarray(v) for k, v in PATTERNS.items()}
 def load(config, **unused_kwargs):
     del unused_kwargs
 
-    gen_func = functools.partial(create_constellations,
+    gen_func_train = functools.partial(create_constellations,
                                  shuffle_corners=config.shuffle_corners,
                                  gaussian_noise=config.corner_noise,
-                                 max_rot=config.max_rotation,
+                                 max_rot=config.max_rotation_train,
                                  max_upscale=config.pattern_upscale,
                                  drop_prob=config.pattern_drop_prob,
-                                 which_patterns=config.patterns.split(','),
+                                 which_patterns=config.patterns_train.split(','),
                                  )
 
-    trainset = IteratorWrapper(gen_func, epoch_size=config.train_size, transform=lambda x: torch.tensor(x),
+
+
+    trainset = IteratorWrapper(gen_func_train, epoch_size=config.train_size, transform=lambda x: torch.tensor(x),
                                keys=['corners', 'presence', 'pattern_class_count'])
 
     train_loader = torch.utils.data.DataLoader(
         trainset, batch_size=config.batch_size, shuffle=False,
         num_workers=8, pin_memory=True)
 
-    if config.test_size == config.train_size:
-        test_loader = train_loader
-    else:
-        testset = IteratorWrapper(gen_func, epoch_size=config.test_size, transform=lambda x: torch.tensor(x),
+    gen_func_test = functools.partial(create_constellations,
+                                 shuffle_corners=config.shuffle_corners,
+                                 gaussian_noise=config.corner_noise,
+                                 max_rot=config.max_rotation_test,
+                                 max_upscale=config.pattern_upscale,
+                                 drop_prob=config.pattern_drop_prob,
+                                 which_patterns=config.patterns_test.split(','),
+                                 )
+
+    # if config.test_size == config.train_size:
+        # test_loader = train_loader
+    #else:
+    testset = IteratorWrapper(gen_func_test, epoch_size=config.test_size, transform=lambda x: torch.tensor(x),
                                   keys=['corners', 'presence', 'pattern_class_count'])
 
-        test_loader = torch.utils.data.DataLoader(
+    test_loader = torch.utils.data.DataLoader(
             testset, batch_size=config.batch_size, shuffle=False,
             num_workers=8, pin_memory=True)
 
