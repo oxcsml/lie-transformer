@@ -137,15 +137,22 @@ def main():
 
             # Logging
             if batch_idx % config.evaluate_every == 0:
-                test_acc = 0.
+                reports = None
                 for data in test_loader:
                     data, presence, target = [d.to(device) for d in data]
                     outputs = model([data, presence], target)
-                    test_acc = test_acc + outputs.acc
+                    outputs.reports.acc = outputs.acc
 
-                outputs['reports'].cls_acc = test_acc / len(test_loader)
+                    if reports is None:
+                        reports = outputs.reports
+                    else:
+                        for k, v in outputs.reports.items():
+                            reports[k] += v
 
-                reports = parse_reports(outputs.reports)
+                for k, v in reports.items():
+                    reports[k] = v / len(test_loader)
+
+                reports = parse_reports(reports)
                 reports['time'] = time.perf_counter() - start_t
                 if report_all == {}:
                     report_all = deepcopy(reports)
