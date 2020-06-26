@@ -144,10 +144,10 @@ def main():
                     outputs.reports.acc = outputs.acc
 
                     if reports is None:
-                        reports = outputs.reports
+                        reports = {k: v.detach().clone().cpu() for k, v in outputs.reports.items()}
                     else:
                         for k, v in outputs.reports.items():
-                            reports[k] += v
+                            reports[k] += v.detach().clone().cpu()
 
                 for k, v in reports.items():
                     reports[k] = v / len(test_loader)
