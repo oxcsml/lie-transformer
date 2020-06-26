@@ -50,14 +50,11 @@ class MultiheadAttentionBlock(nn.Module):
 
 
 class SelfattentionBlock(nn.Module):
-    def __init__(self, dim_in, dim_out, num_heads, ln=False, return_presence=False):
+    def __init__(self, dim_in, dim_out, num_heads, ln=False):
         super(SelfattentionBlock, self).__init__()
         self.mab = MultiheadAttentionBlock(dim_in, dim_in, dim_out, num_heads, ln=ln)
-        self.return_presence = return_presence
 
     def forward(self, X, presence=None):
-        if self.return_presence:
-            return self.mab(X, X, presence_q=presence, presence_k=presence), presence
         return self.mab(X, X, presence_q=presence, presence_k=presence)
 
 
@@ -126,20 +123,30 @@ class SetTransformer(nn.Module):
         else:
             enc_layer_class = SelfattentionBlock
 
-        enc_layers = [InputWrapper(enc_layer_class(dim_input, dim_hidden, num_heads, ln=ln, return_presence=True))]
+        enc_layers = [InputWrapper(enc_layer_class(dim_input, dim_hidden, num_heads, ln=ln))]
         for _ in range(n_enc_layers - 1):
-            enc_layers.append(InputWrapper(enc_layer_class(dim_hidden, dim_hidden, num_heads, ln=ln, return_presence=True)))
+            enc_layers.append(InputWrapper(enc_layer_class(dim_hidden, dim_hidden, num_heads, ln=ln)))
 
-        self.enc = nn.Sequential(*enc_layers)
+        self.enc_layers = nn.ModuleList(enc_layers)
         # self.enc = enc_layers[0]
 
-        dec_layers = [InputWrapper(MultiheadAttentionPooling(dim_hidden, num_heads, num_outputs, ln=ln))]
+        self.pooling_layer = InputWrapper(MultiheadAttentionPooling(dim_hidden, num_heads, num_outputs, ln=ln)) 
+
+        dec_layers = []
         for _ in range(n_dec_layers):
             dec_layers.append(InputWrapper(SelfattentionBlock(dim_hidden, dim_hidden, num_heads, ln=ln)))
         dec_layers.append(InputWrapper(nn.Linear(dim_hidden, dim_output)))
 
-        self.dec = nn.Sequential(*dec_layers)
+        self.dec_layers = nn.ModuleList(dec_layers)
         # self.dec = dec_layers[0]
 
     def forward(self, X, presence=None):
-        return self.dec(self.enc([X, presence]))
+        for enc_layer in self.enc_layers:
+            X = enc_layer([X, presence])
+
+        X = self.pooling_layer([X, presence])
+
+        for dec_layer in self.dec_layers:
+            X = dec_layer(X)
+
+        return X
