@@ -1,23 +1,32 @@
-import os
 import sys
 
+sys.path.append("forge")
 sys.path.append(".")
 from os import path as osp
 import time
 import torch
+from torch import optim
 from torch.utils.tensorboard import SummaryWriter
+from oil.utils.utils import cosLr
+
 
 import forge
 from forge import flags
 import forge.experiment_tools as fet
 from copy import deepcopy
+from collections import defaultdict
 import deepdish as dd
 from tqdm import tqdm
+
+print(dir(forge))
+print(forge.__path__)
+print(sys.path)
 
 from eqv_transformer.train_tools import (
     log_tensorboard,
     parse_reports,
     print_reports,
+    log_reports,
     load_checkpoint,
     save_checkpoint,
     ExponentialMovingAverage,
@@ -97,24 +106,21 @@ def main():
 
     # Load model
     model, model_name = fet.load(config.model_config, config)
-    model = model.to(device)
+    model.to(device)
+
+    config.charge_scale = float(config.charge_scale.numpy())
+    config.ds_stats = [float(stat.numpy()) for stat in config.ds_stats]
 
     # Prepare environment
-    results_folder_name = os.path.join(
-        "results",
+    results_folder_name = osp.join(
         data_name,
         model_name,
-        (
-            config.run_name
-            + "_bs"
-            + str(config.batch_size)
-            + "_lr"
-            + str(config.learning_rate)
-        ),
+        config.run_name
+        + "_bs"
+        + str(config.batch_size)
+        + "_lr"
+        + str(config.learning_rate),
     )
-
-    config.charge_scale = float(config.charge_scale.cpu().numpy())
-    config.ds_stats = [float(s.cpu().numpy()) for s in config.ds_stats]
 
     logdir = osp.join(config.results_dir, results_folder_name.replace(".", "_"))
     logdir, resume_checkpoint = fet.init_checkpoint(
@@ -134,9 +140,14 @@ def main():
         model_params, lr=opt_learning_rate, betas=(config.beta1, config.beta2)
     )
 
+    # Cosine annealing learning rate
+    cos = cosLr(config.train_epochs)
+    lr_sched = lambda e: min(e / (0.01 * config.train_epochs), 1) * cos(e)
+    lr_schedule = optim.lr_scheduler.LambdaLR(model_opt, lr_sched)
+
     # Try to restore model and optimizer from checkpoint
     if resume_checkpoint is not None:
-        start_epoch = load_checkpoint(resume_checkpoint, model, model_opt)
+        start_epoch = load_checkpoint(resume_checkpoint, model, model_opt, lr_schedule)
     else:
         start_epoch = 1
 
@@ -149,10 +160,10 @@ def main():
     # Setup tensorboard writing
     summary_writer = SummaryWriter(logdir)
 
-    report_all = {}
+    report_all = defaultdict(list)
     # Saving model at epoch 0 before training
     print("saving model at epoch 0 before training ... ")
-    save_checkpoint(checkpoint_name, 0, model, model_opt, 0.0)
+    save_checkpoint(checkpoint_name, 0, model, model_opt, lr_schedule, 0.0)
     print("finished saving model at epoch 0 before training")
 
     # Training
@@ -172,13 +183,10 @@ def main():
             model_opt.step()
 
             if config.log_train_values:
+                reports = train_emas(parse_reports(outputs.reports))
                 if batch_idx % config.report_loss_every == 0:
-                    reports = train_emas(parse_reports(outputs.reports))
-                    reports["time"] = time.perf_counter() - start_t
-
-                    log_tensorboard(
-                        summary_writer, train_iter, reports, "train_metrics/"
-                    )
+                    log_tensorboard(summary_writer, train_iter, reports, "train/")
+                    report_all = log_reports(report_all, train_iter, reports, "train")
                     print_reports(
                         reports,
                         start_t,
@@ -191,78 +199,78 @@ def main():
             # Logging
             if batch_idx % config.evaluate_every == 0:
                 with torch.no_grad():
-                    test_mae = 0.0
-                    test_loss = 0.0
-                    for data in dataloaders["test"]:
+                    valid_mae = 0.0
+                    for data in dataloaders["valid"]:
                         data = {k: v.to(device) for k, v in data.items()}
                         outputs = model(data, compute_loss=True)
-                        test_mae += outputs.mae
-                        test_loss += outputs.loss
+                        valid_mae = valid_mae + outputs.mae
 
-                    reports = {}
-                    reports["test_mae"] = test_mae / len(dataloaders["test"])
-                    reports["test_loss"] = test_loss / len(dataloaders["test"])
+                outputs["reports"].valid_mae = valid_mae / len(dataloaders["valid"])
 
-                    reports = parse_reports(reports)
+                reports = parse_reports(outputs.reports)
 
-                    reports["time"] = time.perf_counter() - start_t
-
-                    if report_all == {}:
-                        report_all = deepcopy(reports)
-
-                        for d in reports.keys():
-                            report_all[d] = [report_all[d]]
-                    else:
-                        for d in reports.keys():
-                            report_all[d].append(reports[d])
-
-                    log_tensorboard(summary_writer, train_iter, reports, "test")
-                    print_reports(
-                        reports,
-                        start_t,
-                        epoch,
-                        batch_idx,
-                        len(dataloaders["train"].dataset) // config.batch_size,
-                        prefix="test",
-                    )
+                log_tensorboard(summary_writer, train_iter, reports, "valid")
+                report_all = log_reports(report_all, train_iter, reports, "valid")
+                print_reports(
+                    reports,
+                    start_t,
+                    epoch,
+                    batch_idx,
+                    len(dataloaders["train"].dataset) // config.batch_size,
+                    prefix="valid",
+                )
 
             train_iter += 1
 
             if train_iter % config.save_check_points == 0:
                 save_checkpoint(
-                    checkpoint_name, train_iter, model, model_opt, outputs.loss
+                    checkpoint_name,
+                    train_iter,
+                    model,
+                    model_opt,
+                    lr_schedule,
+                    outputs.loss,
                 )
 
+        # Test model at end of batch
         with torch.no_grad():
-            valid_mae = 0.0
-            valid_loss = 0.0
-            for data in dataloaders["valid"]:
+            test_mae = 0.0
+            for data in dataloaders["test"]:
                 data = {k: v.to(device) for k, v in data.items()}
                 outputs = model(data, compute_loss=True)
-                valid_mae += outputs.mae
-                valid_loss += outputs.loss
+                test_mae = test_mae + outputs.mae
 
-            reports = {}
-            reports["valid_mae"] = test_mae / len(dataloaders["valid"])
-            reports["valid_loss"] = test_loss / len(dataloaders["valid"])
+        outputs["reports"].test_mae = test_mae / len(dataloaders["test"])
 
-            reports = parse_reports(reports)
+        reports = parse_reports(outputs.reports)
 
-            reports["time"] = time.perf_counter() - start_t
+        log_tensorboard(summary_writer, train_iter, reports, "test")
+        report_all = log_reports(report_all, train_iter, reports, "test")
 
-            log_tensorboard(summary_writer, train_iter, reports, "valid")
-            print_reports(
-                reports,
-                start_t,
-                epoch,
-                batch_idx,
-                len(dataloaders["train"].dataset) // config.batch_size,
-                prefix="valid",
-            )
+        print_reports(
+            reports,
+            start_t,
+            epoch,
+            batch_idx,
+            len(dataloaders["train"].dataset) // config.batch_size,
+            prefix="test",
+        )
 
+        # Step the LR schedule
+        lr_schedule.step()
+
+        reports = {"lr": lr_schedule.get_lr()[0], "time": time.perf_counter() - start_t}
+
+        log_tensorboard(summary_writer, train_iter, reports, "stats")
+        report_all = log_reports(report_all, train_iter, reports, "stats")
+
+        # Save the reports
         dd.io.save(logdir + "/results_dict.h5", report_all)
 
-        save_checkpoint(checkpoint_name, train_iter, model, model_opt, outputs.loss)
+        # Save a checkpoint
+        save_checkpoint(
+            checkpoint_name, train_iter, model, model_opt, lr_schedule, outputs.loss
+        )
 
 
 if __name__ == "__main__":
