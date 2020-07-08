@@ -8,7 +8,7 @@ from einops import rearrange, reduce
 from lie_conv.lieGroups import SE3
 from lie_conv.lieConv import GlobalPool, Swish
 from lie_conv.utils import Pass, Expression
-from multihead_neural import MultiheadWeightNet
+from eqv_transformer.multihead_neural import MultiheadWeightNet
 
 
 class SumKernel(nn.Module):
@@ -288,23 +288,3 @@ class EquivariantTransformer(nn.Module):
     def forward(self, input):
         lifted_data = self.group.lift(input, self.liftsamples)
         return self.net(lifted_data)
-
-
-# if __name__ == "__main__":
-#     c_in = 4
-#     c_out = 12
-#     dim_hid = 128
-#     n_heads = 8
-#     net = EquivariantTransformer(c_in, c_out, dim_hid, 8, n_heads)
-
-#     bs = 75
-#     n = 100
-#     xyz_dim = 3
-
-#     coords = torch.rand((bs, n, xyz_dim))
-#     vals = torch.rand((bs, n, c_in))
-#     mask = torch.ones((bs, n), dtype=torch.bool)
-
-#     output = net((coords, vals, mask))
-
-#     print(output.shape)
