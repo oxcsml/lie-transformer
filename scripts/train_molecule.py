@@ -1,6 +1,5 @@
 import sys
 
-sys.path.append("forge")
 sys.path.append(".")
 from os import path as osp
 import time
@@ -171,6 +170,7 @@ def main():
     if config.log_train_values:
         train_emas = ExponentialMovingAverage(alpha=config.ema_alpha, debias=True)
 
+    iters_per_epoch = len(dataloaders["train"])
     for epoch in tqdm(range(start_epoch, config.train_epochs + 1)):
         model.train()
 
@@ -222,6 +222,9 @@ def main():
 
             train_iter += 1
 
+            # Step the LR schedule
+            lr_schedule.step(train_iter / iters_per_epoch)
+
             if train_iter % config.save_check_points == 0:
                 save_checkpoint(
                     checkpoint_name,
@@ -255,9 +258,6 @@ def main():
             len(dataloaders["train"].dataset) // config.batch_size,
             prefix="test",
         )
-
-        # Step the LR schedule
-        lr_schedule.step()
 
         reports = {"lr": lr_schedule.get_lr()[0], "time": time.perf_counter() - start_t}
 
