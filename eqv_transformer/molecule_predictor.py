@@ -37,15 +37,18 @@ class MoleculePredictor(nn.Module):
             # pdb.set_trace()
             if self.ds_stats is not None:
                 meadian, mad = self.ds_stats
-                target = (target - meadian) / mad
-
-            o.loss = (o.prediction - target).abs().mean()
 
             if self.ds_stats is not None:
                 meadian, mad = self.ds_stats
-                o.mae = o.loss * mad
+
+                target_norm = (target - meadian) / mad
+                prediction_actual = o.prediction * mad + meadian
+
+                o.loss = (o.prediction - target_norm).abs().mean()
+                o.mae = (prediction_actual - target).abs().mean()
             else:
-                o.mae = o.loss
+                o.loss = (o.prediction - target).abs().mean()
+                o.mea = o.loss
             # import pdb;
             # pdb.set_trace()
 
