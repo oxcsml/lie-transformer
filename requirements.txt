@@ -7,3 +7,4 @@ simplejson
 future
 deepdish
 tqdm
+einops
