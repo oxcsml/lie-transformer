@@ -124,10 +124,11 @@ class EquivairantMultiheadAttention(nn.Module):
             DotProductKernel(c_in, c_in, c_in, n_heads=n_heads),
         )
 
-        self.output_linear = nn.Linear(c_in * n_heads, c_out)
+        self.input_linear = nn.Linear(c_in, c_out)
+        self.output_linear = nn.Linear(c_out, c_out)
 
         if layer_norm:
-            self.ln_1 = nn.LayerNorm(c_in * n_heads)
+            self.ln_1 = nn.LayerNorm(c_out)
             self.ln_2 = nn.LayerNorm(c_out)
 
     def extract_neighbourhoods(self, input, query_indices=None):
@@ -180,7 +181,7 @@ class EquivairantMultiheadAttention(nn.Module):
         # (bs, n * ns, n * ns, g_dim), (bs, n * ns, c_in), (bs, n * ns)
         pairwise_g, coset_functions, mask = input
 
-        # (bs, n * ns, nbhd_size, g_dim), (bs, n * ns, nbhd_size, c_in), (bs, n * ns, nbhd_size)
+        # (bs, n * ns, nbhd_size, g_dim), (bs, n * ns, nbhd_size, c_in), (bs, n * ns, nbhd_size), (bs, n * ns, nbhd_size)
         (
             nbhd_pairwise_g,
             nbhd_coset_functions,
@@ -211,11 +212,23 @@ class EquivairantMultiheadAttention(nn.Module):
             dim=(2), keepdim=True
         )
 
+        # Pass the inputs through the value linear layer
+        # (bs, n * ns, nbhd_size, c_in) -> (bs, n * ns, nbhd_size, c_out)
+        nbhd_coset_functions = self.input_linear(nbhd_coset_functions)
+        coset_functions = self.input_linear(coset_functions)
+        # Split the features into heads
+        nbhd_coset_functions = rearrange(
+            nbhd_coset_functions, "b n m (h d) -> b n m h d", h=self.n_heads
+        )
+        coset_functions = rearrange(
+            coset_functions, "b n (h d) -> b n h d", h=self.n_heads
+        )
+
         # Sum over the coefficients
         # TODO: Currently allows self interaction in the attention sum. Some pre matrices?
-        # (bs, n * ns, nbhd_size, h), (bs, n * ns, nbhd_size, c_in) -> (bs, n * ns, nbhd_size, h)
-        coset_functions = coset_functions.unsqueeze(-2) + (
-            softmax_attention.unsqueeze(-1) * nbhd_coset_functions.unsqueeze(-2)
+        # (bs, n * ns, nbhd_size, h), (bs, n * ns, nbhd_size, h, c_out / h) -> (bs, n * ns, nbhd_size, h)
+        coset_functions = coset_functions + (
+            softmax_attention.unsqueeze(-1) * nbhd_coset_functions
         ).sum(dim=2)
 
         coset_functions = rearrange(coset_functions, "b n h d -> b n (h d)")
