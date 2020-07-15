@@ -49,7 +49,7 @@ def load(config, **unused_kwargs):
             dataset,
             batch_size=config.batch_size,
             num_workers=0,
-            shuffle=(key == "train"),
+            shuffle=(key == "train"),  # False,  # TODO: temp =
             pin_memory=False,
             collate_fn=collate_fn,
             drop_last=True,
@@ -57,7 +57,7 @@ def load(config, **unused_kwargs):
         for key, dataset in datasets.items()
     }
 
-    return dataloaders, num_species, charge_scale, ds_stats, f'QM9_{config.task}'
+    return dataloaders, num_species, charge_scale, ds_stats, f"QM9_{config.task}"
 
 
 if __name__ == "__main__":
