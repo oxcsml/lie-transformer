@@ -2,6 +2,7 @@ import math
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from einops import rearrange, reduce
 
@@ -18,10 +19,10 @@ class SumKernel(nn.Module):
         self.location_kernel = location_kernel
         self.feature_kernel = feature_kernel
 
-    def forward(self, pairwise_locations, query_features, key_features, nbhd_idx):
-        return self.location_kernel(pairwise_locations).squeeze() + self.feature_kernel(
-            query_features, key_features, nbhd_idx
-        )
+    def forward(self, pairwise_locations, mask, query_features, key_features, nbhd_idx):
+        return self.location_kernel((None, pairwise_locations, mask))[
+            1
+        ].squeeze() + self.feature_kernel(query_features, key_features, nbhd_idx)
 
 
 class DotProductKernel(nn.Module):
@@ -68,7 +69,7 @@ class DotProductKernel(nn.Module):
         # (bs, n, c_in) -> (bs, n, embed_dim) -> (bs * n_heads, n, h_dim)
         Q = rearrange(self.fc_q(q), "b n (h d) -> (b h) n d", h=self.n_heads)
         # (bs * n_heads, n, h_dim), (bs * n_heads, m, h_dim) -> (bs * n_heads, n, m)
-        A_ = Q.bmm(K.transpose(1, 2))
+        A_ = Q.bmm(K.transpose(1, 2)) / math.sqrt(self.embed_dim)
 
         # (bs * n_heads, n, nbhd_size) -> (bs, n, nbhd_size, n_heads)
         A_ = rearrange(A_, "(b h) n m -> b n m h", h=self.n_heads)
@@ -192,25 +193,31 @@ class EquivairantMultiheadAttention(nn.Module):
         # Expand across head dimension TODO: possibly waseful and could avoid with a special linear layer
         # (bs, n * ns, nbhd_size, g_dim) -> (bs, n * ns, nbhd_size, h, g_dim)
         nbhd_pairwise_g = nbhd_pairwise_g.unsqueeze(-2).repeat(1, 1, 1, self.n_heads, 1)
+        # Exapand the mask along the head dim
+        nbhd_mask = nbhd_mask.unsqueeze(-1)
 
         # (bs, n * ns, n * ns, g_dim), (bs, n * ns, c_in), (bs, n * ns, nbhd_size, c_in) -> (bs, n * ns, nbhd_size, h)
         presoftmax_weights = self.kernel(
-            nbhd_pairwise_g, coset_functions, coset_functions, nbhd_idx
+            nbhd_pairwise_g, nbhd_mask, coset_functions, coset_functions, nbhd_idx
         )
-        presoftmax_weights = torch.exp(presoftmax_weights)
+        # presoftmax_weights = torch.exp(presoftmax_weights)
         # Zero out the correct channels
         presoftmax_weights = torch.where(
             # (bs, n * ns, nbhd_size) -> (bs, n * ns, nbhd_size, 1). Constant along head dim
-            nbhd_mask.unsqueeze(-1),
+            nbhd_mask,
             presoftmax_weights,
-            torch.zeros_like(presoftmax_weights),
+            torch.tensor(
+                -1e38, dtype=presoftmax_weights.dtype, device=presoftmax_weights.device
+            )
+            * torch.ones_like(presoftmax_weights),
         )
 
         # Compute the normalised attention weights
         # (bs, n * ns, nbhd_size, h) -> (bs, n * ns, nbhd_size, h)
-        softmax_attention = presoftmax_weights / presoftmax_weights.sum(
-            dim=(2), keepdim=True
-        )
+        # softmax_attention = presoftmax_weights / presoftmax_weights.sum(
+        #     dim=(2), keepdim=True
+        # )
+        softmax_attention = F.softmax(presoftmax_weights, dim=2)
 
         # Pass the inputs through the value linear layer
         # (bs, n * ns, nbhd_size, c_in) -> (bs, n * ns, nbhd_size, c_out)

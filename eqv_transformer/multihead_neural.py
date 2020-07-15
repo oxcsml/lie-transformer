@@ -61,9 +61,9 @@ def MultiheadLinearBNact(c_in, c_out, n_heads, act="swish", bn=True):
     assert act in ("relu", "swish"), f"unknown activation type {act}"
     normlayer = MaskBatchNormNd(c_out)
     return nn.Sequential(
-        MultiheadLinear(n_heads, c_in, c_out),
+        Pass(MultiheadLinear(n_heads, c_in, c_out), dim=1),
         normlayer if bn else nn.Sequential(),
-        Swish() if act == "swish" else nn.ReLU(),
+        Pass(Swish() if act == "swish" else nn.ReLU(), dim=1),
     )
 
 
