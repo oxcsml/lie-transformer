@@ -29,28 +29,27 @@ class MoleculePredictor(nn.Module):
 
         o.prediction = self.predictor(inpt)
 
-        if compute_loss:
-            # label = label.long()
-            target = inpt[self.task]
+        # label = label.long()
+        target = inpt[self.task]
 
-            # import pdb;
-            # pdb.set_trace()
-            if self.ds_stats is not None:
-                meadian, mad = self.ds_stats
+        # import pdb;
+        # pdb.set_trace()
+        if self.ds_stats is not None:
+            meadian, mad = self.ds_stats
 
-            if self.ds_stats is not None:
-                meadian, mad = self.ds_stats
+        if self.ds_stats is not None:
+            meadian, mad = self.ds_stats
 
-                target_norm = (target - meadian) / mad
-                prediction_actual = o.prediction * mad + meadian
+            target_norm = (target - meadian) / mad
+            prediction_actual = o.prediction * mad + meadian
 
-                o.loss = (o.prediction - target_norm).abs().mean()
-                o.mae = (prediction_actual - target).abs().mean()
-            else:
-                o.loss = (o.prediction - target).abs().mean()
-                o.mea = o.loss
-            # import pdb;
-            # pdb.set_trace()
+            o.loss = (o.prediction - target_norm).abs().mean()
+            o.mae = (prediction_actual - target).abs().mean()
+        else:
+            o.loss = (o.prediction - target).abs().mean()
+            o.mae = o.loss
+        # import pdb;
+        # pdb.set_trace()
 
         o.reports = AttrDict({"loss": o.loss, "mae": o.mae})
 
