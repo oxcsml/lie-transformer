@@ -1,3 +1,5 @@
+import torch
+
 from lie_conv.moleculeTrainer import MolecLieResNet
 
 from eqv_transformer.molecule_predictor import MoleculePredictor
@@ -49,6 +51,7 @@ def load(config, **unused_kwargs):
     else:
         raise ValueError(f"{config.group} is and invalid group")
 
+    torch.manual_seed(0)  # TODO: temp fix of seed
     predictor = MolecLieResNet(
         config.num_species,
         config.charge_scale,
