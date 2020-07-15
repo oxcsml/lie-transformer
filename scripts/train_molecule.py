@@ -84,6 +84,11 @@ flags.DEFINE_integer("batch_size", 5, "Mini-batch size.")
 flags.DEFINE_float("learning_rate", 1e-5, "SGD learning rate.")
 flags.DEFINE_float("beta1", 0.5, "Adam Beta 1 parameter")
 flags.DEFINE_float("beta2", 0.9, "Adam Beta 2 parameter")
+flags.DEFINE_string(
+    "lr_schedule",
+    "cosine_warmup",
+    "What learning rate schedule to use. Options: cosine, none",
+)
 
 
 #####################################################################################################################
@@ -138,10 +143,19 @@ def main():
     model_opt = torch.optim.Adam(
         model_params, lr=opt_learning_rate, betas=(config.beta1, config.beta2)
     )
+    # model_opt = torch.optim.SGD(model_params, lr=opt_learning_rate)
 
     # Cosine annealing learning rate
-    cos = cosLr(config.train_epochs)
-    lr_sched = lambda e: min(e / (0.01 * config.train_epochs), 1) * cos(e)
+    if config.lr_schedule == "cosine_warmup":
+        cos = cosLr(config.train_epochs)
+        lr_sched = lambda e: min(e / (0.01 * config.train_epochs), 1) * cos(e)
+    elif config.lr_schedule == "none":
+        lr_sched = lambda e: 1.0
+    else:
+        raise ValueError(
+            f"{config.lr_schedule} is not a recognised learning rate schedule"
+        )
+
     lr_schedule = optim.lr_scheduler.LambdaLR(model_opt, lr_sched)
 
     # Try to restore model and optimizer from checkpoint
@@ -176,10 +190,10 @@ def main():
 
         for batch_idx, data in enumerate(dataloaders["train"]):
             data = {k: v.to(device) for k, v in data.items()}
-            outputs = model(data, compute_loss=True)
 
             model_opt.zero_grad()
-            outputs.loss.backward(retain_graph=False)
+            outputs = model(data, compute_loss=True)
+            outputs.loss.backward()
             model_opt.step()
 
             if config.log_train_values:
