@@ -42,6 +42,7 @@ class MultiheadAttentionBlock(nn.Module):
 
         A = torch.softmax(logits, 2)
 
+        # TODO: should the residual operation below include Q_?    
         O = torch.cat((Q_ + A.bmm(V_)).split(queries.size(0), 0), 2)
         O = O if getattr(self, 'ln0', None) is None else self.ln0(O)
         O = O + F.relu(self.fc_o(O))
