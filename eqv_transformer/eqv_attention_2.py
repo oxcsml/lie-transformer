@@ -9,6 +9,7 @@ from einops import rearrange, reduce
 from lie_conv.lieGroups import SE3
 from lie_conv.lieConv import GlobalPool, Swish
 from lie_conv.utils import Pass, Expression
+from lie_conv.masked_batchnorm import MaskBatchNormNd
 from eqv_transformer.multihead_neural import MultiheadWeightNet
 
 
@@ -23,6 +24,7 @@ class SumKernel(nn.Module):
         return self.location_kernel((None, pairwise_locations, mask))[
             1
         ].squeeze() + self.feature_kernel(query_features, key_features, nbhd_idx)
+        # return self.feature_kernel(query_features, key_features, nbhd_idx)
 
 
 class DotProductKernel(nn.Module):
@@ -295,6 +297,7 @@ class EquivariantTransformer(nn.Module):
                 attention(dim_hidden[i], dim_hidden[i + 1], num_heads[i])
                 for i in range(num_layers)
             ],
+            # MaskBatchNormNd(dim_hidden[-1]) if batch_norm else nn.Sequential(),
             Pass(Swish() if kernel_act == "swish" else nn.ReLU()),
             Pass(nn.Linear(dim_hidden[-1], dim_output), dim=1),
             GlobalPool(mean=global_pool_mean)

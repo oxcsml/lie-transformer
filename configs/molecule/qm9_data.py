@@ -24,6 +24,7 @@ flags.DEFINE_string(
 flags.DEFINE_boolean(
     "recenter", False, "Recenter the positions of atoms with charge > 0"
 )
+flags.DEFINE_integer("batch_fit", 0, "number of samples to fit to")
 
 
 def load(config, **unused_kwargs):
@@ -34,6 +35,12 @@ def load(config, **unused_kwargs):
         )
         if config.subsample_trainset != 1.0:
             datasets.update(split_dataset(datasets["train"], config.subsample_trainset))
+        if config.batch_fit != 0:
+            datasets.update(
+                split_dataset(datasets["train"], {"train": config.batch_fit})
+            )
+            datasets["test"] = datasets["train"]
+            datasets["valid"] = datasets["train"]
 
     ds_stats = datasets["train"].stats[config.task]
 
@@ -52,7 +59,7 @@ def load(config, **unused_kwargs):
             shuffle=(key == "train"),  # False,  # TODO: temp =
             pin_memory=False,
             collate_fn=collate_fn,
-            drop_last=True,
+            drop_last=config.batch_fit == 0,
         )
         for key, dataset in datasets.items()
     }

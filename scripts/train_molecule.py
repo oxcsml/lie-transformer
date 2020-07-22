@@ -116,15 +116,21 @@ def main():
     config.ds_stats = [float(stat.numpy()) for stat in config.ds_stats]
 
     # Prepare environment
-    results_folder_name = osp.join(
-        data_name,
-        model_name,
+    run_name = (
         config.run_name
         + "_bs"
         + str(config.batch_size)
         + "_lr"
-        + str(config.learning_rate),
+        + str(config.learning_rate)
     )
+
+    if config.batch_fit != 0:
+        run_name += "_bf" + str(config.batch_fit)
+
+    if config.lr_schedule != "none":
+        run_name += "_" + config.lr_schedule
+
+    results_folder_name = osp.join(data_name, model_name, run_name,)
 
     logdir = osp.join(config.results_dir, results_folder_name.replace(".", "_"))
     logdir, resume_checkpoint = fet.init_checkpoint(
@@ -197,7 +203,7 @@ def main():
             model_opt.step()
 
             if config.log_train_values:
-                reports = train_emas(parse_reports(outputs.reports))
+                reports = parse_reports(outputs.reports)
                 if batch_idx % config.report_loss_every == 0:
                     log_tensorboard(summary_writer, train_iter, reports, "train/")
                     report_all = log_reports(report_all, train_iter, reports, "train")

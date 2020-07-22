@@ -31,6 +31,7 @@ flags.DEFINE_string("group", "SE3", "Group to be invariant to")
 flags.DEFINE_integer(
     "lift_samples", 1, "Number of coset lift samples to use for non-trivial stabilisers"
 )
+flags.DEFINE_integer("model_seed", 0, "Model rng seed")
 
 
 class MoleculeEquivariantTransformer(EquivariantTransformer):
@@ -75,7 +76,7 @@ def load(config, **unused_kwargs):
     else:
         raise ValueError(f"{config.group} is and invalid group")
 
-    torch.manual_seed(0)  # TODO: temp fix of seed
+    torch.manual_seed(config.model_seed)
     predictor = MoleculeEquivariantTransformer(
         config.num_species,
         config.charge_scale,
