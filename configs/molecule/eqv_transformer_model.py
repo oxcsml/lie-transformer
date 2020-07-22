@@ -1,6 +1,6 @@
 import torch
 
-from eqv_transformer.eqv_attention_2 import EquivariantTransformer
+from eqv_transformer.eqv_attention import EquivariantTransformer
 from eqv_transformer.molecule_predictor import MoleculePredictor
 from lie_conv.lieGroups import SE3, SO3, T, Trivial
 from lie_conv.datasets import SE3aug
