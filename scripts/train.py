@@ -39,10 +39,10 @@ flags.DEFINE_string(
 
 # Configuration files to load
 flags.DEFINE_string(
-    "data_config", "configs/constellation.py", "Path to a data config file."
+    "data_config", "configs/constellation/constellation.py", "Path to a data config file."
 )
 flags.DEFINE_string(
-    "model_config", "configs/eqv_transformer_model.py", "Path to a model config file."
+    "model_config", "configs/constellation/eqv_transformer_model.py", "Path to a model config file."
 )
 # Job management
 flags.DEFINE_string("run_name", "test", "Name of this job and name of results folder.")
