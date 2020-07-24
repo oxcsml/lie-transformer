@@ -21,10 +21,10 @@ def generate_examples(path):
 
     testset = create_constellations(size_n=config.test_size, shuffle_corners=config.shuffle_corners,
         gaussian_noise=config.corner_noise,
-        max_rot=config.max_rotation_train,
+        max_rot=config.max_rotation_test,
         max_upscale=config.pattern_upscale,
         drop_prob=config.pattern_drop_prob,
-        which_patterns=config.patterns_train.split(','),
+        which_patterns=config.patterns_test.split(','),
         )
 
 
