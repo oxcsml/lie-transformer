@@ -7,26 +7,48 @@ import forge.experiment_tools as fet
 
 
 def parse_reports(report_dict):
-    return {k: v.item() if len(v.shape) == 0 else v.detach().clone() for k, v in report_dict.items()}
+    return {
+        k: v.item() if len(v.shape) == 0 else v.detach().clone()
+        for k, v in report_dict.items()
+    }
 
 
-def print_reports(report_dict, start_time, epoch, batch_idx, num_epochs, prefix=''):
+def print_reports(report_dict, start_time, epoch, batch_idx, num_epochs, prefix=""):
 
-    reports = ['{}:{:.03f}'.format(*item) for item in report_dict.items()]
-    report_string = ', '.join(reports)
+    reports = ["{}:{:.03f}".format(*item) for item in report_dict.items()]
+    report_string = ", ".join(reports)
     if prefix:
-        print(prefix, end=': ')
+        print(prefix, end=": ")
 
-    print('time {:.03f},  epoch: {} [{} / {}]: {}'.format(
-        time.perf_counter() - start_time, epoch, batch_idx, num_epochs, report_string))
+    print(
+        "time {:.03f},  epoch: {} [{} / {}]: {}".format(
+            time.perf_counter() - start_time,
+            epoch,
+            batch_idx,
+            num_epochs,
+            report_string,
+        )
+    )
 
 
-def log_tensorboard(writer, iteration, report_dict, prefix=''):
-    if prefix and not prefix.endswith('/'):
-        prefix = prefix + '/'
+def log_tensorboard(writer, iteration, report_dict, prefix=""):
+    if prefix and not prefix.endswith("/"):
+        prefix = prefix + "/"
 
     for k, v in report_dict.items():
         writer.add_scalar(prefix + k, v, iteration)
+
+
+def log_reports(reports_all, iteration, reports, prefix=""):
+    reports["iteration"] = iteration
+    if prefix != "":
+        for d in reports.keys():
+            reports_all[prefix + "_" + d].append(reports[d])
+    else:
+        for d in reports.keys():
+            reports_all[d].append(reports[d])
+
+    return reports_all
 
 
 def get_checkpoint_iter(checkpoint_iter, checkpoint_dir):
@@ -36,49 +58,55 @@ def get_checkpoint_iter(checkpoint_iter, checkpoint_dir):
     return max(fet.find_model_files(checkpoint_dir).keys())
 
 
-def load_checkpoint(checkpoint_path, model, opt):
+def load_checkpoint(checkpoint_path, model, opt, lr_sched):
     print("Restoring checkpoint from '{}'".format(checkpoint_path))
     checkpoint = torch.load(checkpoint_path)
     # Restore model
-    model.load_state_dict(checkpoint['model_state_dict'])
+    model.load_state_dict(checkpoint["model_state_dict"])
 
     # Restore optimizer
-    opt.load_state_dict(checkpoint['model_optimizer_state_dict'])
+    opt.load_state_dict(checkpoint["model_optimizer_state_dict"])
+
+    # Restore LR schedule
+    lr_sched.load_state_dict(checkpoint["model_lr_sched_state_dict"])
+
     # Update starting epoch
-    start_epoch = checkpoint['epoch'] + 1
+    start_epoch = checkpoint["epoch"] + 1
     return start_epoch
 
 
-def save_checkpoint(checkpoint_name, epoch, model, opt, loss=None):
-    epoch_ckpt_file = '{}-{}'.format(checkpoint_name, epoch)
+def save_checkpoint(checkpoint_name, epoch, model, opt, lr_sched, loss=None):
+    epoch_ckpt_file = "{}-{}".format(checkpoint_name, epoch)
     print("Saving model training checkpoint to {}".format(epoch_ckpt_file))
 
     state = {
-        'epoch': epoch,
-        'model_state_dict': model.state_dict(),
-        'model_optimizer_state_dict': opt.state_dict(),
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "model_optimizer_state_dict": opt.state_dict(),
+        "model_lr_sched_state_dict": lr_sched.state_dict(),
     }
 
     if loss is not None:
-        state['loss'] = loss
+        state["loss"] = loss
 
     torch.save(state, epoch_ckpt_file)
     return epoch_ckpt_file
 
 
 class ExponentialMovingAverage(nn.Module):
-
-    def __init__(self, alpha=.99, initial_value=0., debias=False):
+    def __init__(self, alpha=0.99, initial_value=0.0, debias=False):
         super(ExponentialMovingAverage, self).__init__()
 
         self.alpha = alpha
         self.initial_value = initial_value
         self.debias = debias
         if self.debias and self.initial_value != 0:
-            raise NotImplementedError('Debiasing is implemented only for initial_value==0.')
+            raise NotImplementedError(
+                "Debiasing is implemented only for initial_value==0."
+            )
 
         self.ema = None
-        self.alpha_power = 1.
+        self.alpha_power = 1.0
 
     def forward(self, x):
         """x can be a scalar, a tensor, or a dict of scalars or tensors."""
@@ -89,7 +117,7 @@ class ExponentialMovingAverage(nn.Module):
             else:
                 self.ema = self.initial_value
 
-        am1 = 1. - self.alpha
+        am1 = 1.0 - self.alpha
         if isinstance(x, dict):
             for k, v in x.items():
                 self.ema[k] = self.ema[k] * self.alpha + v * am1
@@ -98,10 +126,10 @@ class ExponentialMovingAverage(nn.Module):
             self.ema = self.ema * self.alpha + x * am1
             ema = self.ema
 
-        if self.debias and self.alpha_power > 0.:
+        if self.debias and self.alpha_power > 0.0:
             self.alpha_power *= self.alpha
-            apm1 = 1. - self.alpha_power
-            
+            apm1 = 1.0 - self.alpha_power
+
             if isinstance(ema, dict):
                 for k in ema:
                     ema[k] /= apm1

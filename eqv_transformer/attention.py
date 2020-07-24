@@ -127,16 +127,26 @@ class SetTransformer(nn.Module):
         for _ in range(n_enc_layers - 1):
             enc_layers.append(InputWrapper(enc_layer_class(dim_hidden, dim_hidden, num_heads, ln=ln)))
 
-        self.enc = nn.Sequential(*enc_layers)
+        self.enc_layers = nn.ModuleList(enc_layers)
         # self.enc = enc_layers[0]
 
-        dec_layers = [InputWrapper(MultiheadAttentionPooling(dim_hidden, num_heads, num_outputs, ln=ln))]
+        self.pooling_layer = InputWrapper(MultiheadAttentionPooling(dim_hidden, num_heads, num_outputs, ln=ln)) 
+
+        dec_layers = []
         for _ in range(n_dec_layers):
             dec_layers.append(InputWrapper(SelfattentionBlock(dim_hidden, dim_hidden, num_heads, ln=ln)))
         dec_layers.append(InputWrapper(nn.Linear(dim_hidden, dim_output)))
 
-        self.dec = nn.Sequential(*dec_layers)
+        self.dec_layers = nn.ModuleList(dec_layers)
         # self.dec = dec_layers[0]
 
     def forward(self, X, presence=None):
-        return self.dec([self.enc([X, presence]), presence])
+        for enc_layer in self.enc_layers:
+            X = enc_layer([X, presence])
+
+        X = self.pooling_layer([X, presence])
+
+        for dec_layer in self.dec_layers:
+            X = dec_layer(X)
+
+        return X

@@ -1,8 +1,10 @@
 tensorflow==1.14
-torch
-torchvision
+torch # ==1.4.0
+torchvision # ==0.5.0
 numpy
 attrdict
 simplejson
 future
 deepdish
+tqdm
+einops
