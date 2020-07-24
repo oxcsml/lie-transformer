@@ -1,13 +1,9 @@
-import sys
-
-sys.path.append(".")
 from os import path as osp
 import time
 import torch
 from torch import optim
 from torch.utils.tensorboard import SummaryWriter
 from oil.utils.utils import cosLr
-
 
 import forge
 from forge import flags
@@ -16,10 +12,6 @@ from copy import deepcopy
 from collections import defaultdict
 import deepdish as dd
 from tqdm import tqdm
-
-print(dir(forge))
-print(forge.__path__)
-print(sys.path)
 
 from eqv_transformer.train_tools import (
     log_tensorboard,
