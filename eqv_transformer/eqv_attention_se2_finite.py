@@ -42,7 +42,6 @@ class MultiheadAttentionBlock(nn.Module):
 
         A = torch.softmax(logits, 2)
 
-        # TODO: should the residual operation below include Q_?    
         O = torch.cat((Q_ + A.bmm(V_)).split(queries.size(0), 0), 2)
         O = O if getattr(self, 'ln0', None) is None else self.ln0(O)
         O = O + F.relu(self.fc_o(O))
@@ -187,11 +186,12 @@ class EqvSelfAttention(nn.Module):
             self.ln0 = nn.LayerNorm(dim_V)
             self.ln1 = nn.LayerNorm(dim_V)
         self.fc_o = nn.Linear(dim_V, dim_V)
-        self.k_x = nn.Sequential(
+        self.k_x = nn.ModuleList([nn.Sequential(
             nn.Linear(3, 3),
             nn.ReLU(),
             nn.Linear(3, 1)
-        )
+        ) for _ in range(self.num_heads)])
+
 
     def forward(self, X_lift, Y_lift, X_pairs, presence_q=None, presence_k=None):
         keys = queries = values = Y_lift
@@ -204,12 +204,11 @@ class EqvSelfAttention(nn.Module):
         K_ = torch.cat(keys.split(dim_split, 2), 0)
         V_ = torch.cat(values.split(dim_split, 2), 0)
 
-        logits = Q_.bmm(K_.transpose(1, 2)) / math.sqrt(self.dim_V)
-        loc_logits = self.k_x(X_pairs).squeeze(3)
+        content_logits = Q_.bmm(K_.transpose(1, 2)) / math.sqrt(self.dim_V)
+        loc_logits = torch.cat([k(X_pairs).squeeze(3) for k in self.k_x], 0)
+        # loc_logits = self.k_x(X_pairs).squeeze(3) # single kernel
 
-        # print(logits.shape, loc_logits.shape)
-
-        logits = logits + loc_logits.repeat(self.num_heads, 1, 1)
+        logits = content_logits + loc_logits #.repeat(self.num_heads, 1, 1)
 
         # bias the logits to not take absent entries into account
         inf = torch.tensor(1e38, dtype=torch.float32, device=queries.device)
