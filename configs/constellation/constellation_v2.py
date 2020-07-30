@@ -8,12 +8,12 @@ There are two important changes:
 import collections
 import functools
 import numpy as np
-
+import tensorflow as tf
 import torch
 from torchvision import transforms
-
+import ipdb
 from forge import flags
-
+import pickle
 import os
 import json
 
@@ -205,7 +205,17 @@ def create_dataset(gen_func, epoch_size, transform=None, keys=None, device=None)
 
 def load(config):
 
-    gen_func = functools.partial(create_constellations,
+    train_path = os.path.join(config.data_dir, 'constellation/train_{}_{}.pkl'.format(config.train_size, config.patterns_reps))
+    test_path = os.path.join(config.data_dir, 'constellation/test_{}_{}.pkl'.format(config.test_size, config.patterns_reps))
+
+    if tf.io.gfile.exists(train_path) and tf.io.gfile.exists(test_path):
+        with tf.io.gfile.GFile(train_path, 'rb') as f:
+            trainset = pickle.load(f)
+        with tf.io.gfile.GFile(test_path, 'rb') as f:
+            testset = pickle.load(f)
+
+    else:
+        gen_func = functools.partial(create_constellations,
                                  shuffle_corners=config.shuffle_corners,
                                  gaussian_noise=config.corner_noise,
                                  max_rot=config.max_rotation,
@@ -216,16 +226,15 @@ def load(config):
                                      seed=config.data_seed)
                                  )
 
-    trainset = create_dataset(gen_func, epoch_size=config.train_size, transform=lambda x: torch.tensor(x),
+        trainset = create_dataset(gen_func, epoch_size=config.train_size, transform=lambda x: torch.tensor(x),
                               keys=['corners', 'presence', 'pattern_class_count'])
+
+        testset = create_dataset(gen_func, epoch_size=config.test_size, transform=lambda x: torch.tensor(x),
+                             keys=['corners', 'presence', 'pattern_class_count'])
 
     train_loader = torch.utils.data.DataLoader(
         trainset, batch_size=config.batch_size, shuffle=True,
         num_workers=8, pin_memory=True)
-
-    testset = create_dataset(gen_func, epoch_size=config.test_size, transform=lambda x: torch.tensor(x),
-                             keys=['corners', 'presence', 'pattern_class_count'])
-
     test_loader = torch.utils.data.DataLoader(
         testset, batch_size=config.batch_size, shuffle=False,
         num_workers=8, pin_memory=True)
