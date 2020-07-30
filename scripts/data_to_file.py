@@ -10,7 +10,7 @@ import forge
 from forge import flags
 import torch
 
-from configs.constellation.constellation_v2 import create_constellations, create_dataset, patterns
+from configs.constellation.constellation import create_constellations, create_dataset, patterns
 import tensorflow as tf
 config = forge.config()
 
