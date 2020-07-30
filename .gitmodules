@@ -1,6 +1,6 @@
 [submodule "forge"]
 	path = forge
-	url = https://github.com/akosiorek/forge
+	url = git@github.com:akosiorek/forge.git
 [submodule "LieConv"]
 	path = LieConv
 	url = git@github.com:mfinzi/LieConv.git

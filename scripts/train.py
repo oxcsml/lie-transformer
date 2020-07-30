@@ -1,7 +1,3 @@
-import sys
-
-sys.path.append("forge")
-sys.path.append(".")
 from os import path as osp
 import time
 import torch
@@ -39,10 +35,14 @@ flags.DEFINE_string(
 
 # Configuration files to load
 flags.DEFINE_string(
-    "data_config", "configs/constellation/constellation.py", "Path to a data config file."
+    "data_config",
+    "configs/constellation/constellation.py",
+    "Path to a data config file.",
 )
 flags.DEFINE_string(
-    "model_config", "configs/constellation/eqv_transformer_model.py", "Path to a model config file."
+    "model_config",
+    "configs/constellation/eqv_transformer_model.py",
+    "Path to a model config file.",
 )
 # Job management
 flags.DEFINE_string("run_name", "test", "Name of this job and name of results folder.")
@@ -81,6 +81,13 @@ def main():
     # Parse flags
     config = forge.config()
 
+    # Load data
+    train_loader, test_loader, data_name = fet.load(config.data_config, config=config)
+
+    # Load model
+    model, model_name = fet.load(config.model_config, config)
+    model = model.to(device)
+
     # Prepare environment
     results_folder_name = (
         config.run_name
@@ -96,12 +103,6 @@ def main():
     )
 
     checkpoint_name = osp.join(logdir, "model.ckpt")
-
-    # Load data
-    train_loader, test_loader = fet.load(config.data_config, config=config)
-
-    # Load model
-    model = fet.load(config.model_config, config).to(device)
 
     # Print flags
     fet.print_flags()
@@ -166,24 +167,17 @@ def main():
 
             # Logging
             if batch_idx % config.evaluate_every == 0:
-                reports = None
-                for data in test_loader:
-                    data, presence, target = [d.to(device) for d in data]
-                    outputs = model([data, presence], target)
-                    outputs.reports.acc = outputs.acc
+                with torch.no_grad():
+                    test_acc = 0.0
+                    for data in test_loader:
+                        data, presence, target = [d.to(device) for d in data]
+                        outputs = model([data, presence], target)
+                        test_acc += outputs.acc
 
-                    if reports is None:
-                        reports = {k: v.detach().clone().cpu() for k, v in outputs.reports.items()}
-                    else:
-                        for k, v in outputs.reports.items():
-                            reports[k] += v.detach().clone().cpu()
+                outputs["reports"].cls_acc = test_acc / len(test_loader)
 
-                for k, v in reports.items():
-                    reports[k] = v / len(test_loader)
-
-                reports = parse_reports(reports)
-                reports['time'] = time.perf_counter() - start_t
-
+                reports = parse_reports(outputs.reports)
+                reports["time"] = time.perf_counter() - start_t
                 if report_all == {}:
                     report_all = deepcopy(reports)
 

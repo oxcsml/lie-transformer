@@ -17,23 +17,21 @@ import pickle
 import os
 import json
 
-flags.DEFINE_integer('train_size', 100000,
-                     'Number of training examples per epoch.')
-flags.DEFINE_integer('test_size', 10000,
-                     'Number of testing examples per epoch.')
-flags.DEFINE_float('corner_noise', .1, 'See `create_constellations`.')
-flags.DEFINE_boolean('shuffle_corners', True, 'See `create_constellations`.')
+flags.DEFINE_integer("train_size", 100000, "Number of training examples per epoch.")
+flags.DEFINE_integer("test_size", 10000, "Number of testing examples per epoch.")
+flags.DEFINE_float("corner_noise", 0.1, "See `create_constellations`.")
+flags.DEFINE_boolean("shuffle_corners", True, "See `create_constellations`.")
 
-flags.DEFINE_float('pattern_upscale', 0., 'See `create_constellations`.')
-flags.DEFINE_float('max_rotation', .33, 'See `create_constellations`.')
-flags.DEFINE_float('pattern_drop_prob', .5, 'See `create_constellations`.')
-flags.DEFINE_integer('patterns_reps', 2, 'See `create_constellations`.')
-flags.DEFINE_integer('data_seed', 0, 'Seed for data generation.')
+flags.DEFINE_float("pattern_upscale", 0.0, "See `create_constellations`.")
+flags.DEFINE_float("max_rotation", 0.33, "See `create_constellations`.")
+flags.DEFINE_float("pattern_drop_prob", 0.5, "See `create_constellations`.")
+flags.DEFINE_integer("patterns_reps", 2, "See `create_constellations`.")
+flags.DEFINE_integer("data_seed", 0, "Seed for data generation.")
 
 
 def roots_of_unity(n):
-    x_coors = np.cos(2*np.pi/n * np.arange(n)[..., np.newaxis])
-    y_coors = np.sin(2*np.pi/n * np.arange(n)[..., np.newaxis])
+    x_coors = np.cos(2 * np.pi / n * np.arange(n)[..., np.newaxis])
+    y_coors = np.sin(2 * np.pi / n * np.arange(n)[..., np.newaxis])
 
     coors = np.concatenate([x_coors, y_coors, np.tile([[1]], (n, 1))], axis=1)
 
@@ -41,26 +39,30 @@ def roots_of_unity(n):
 
 
 PATTERNS = {
-    'triangle': roots_of_unity(3) + 2,
-    'square': roots_of_unity(4) + 2,
-    'pentagon': roots_of_unity(5) + 2,
-    'L': np.asarray([[1, 1, 1], [1 + 1, 1, 1], [1 + 2, 1, 1], [1 + 2, 1 + 1, 1], [1 + 2, 1 + 2, 1]])
+    "triangle": roots_of_unity(3) + 2,
+    "square": roots_of_unity(4) + 2,
+    "pentagon": roots_of_unity(5) + 2,
+    "L": np.asarray(
+        [[1, 1, 1], [1 + 1, 1, 1], [1 + 2, 1, 1], [1 + 2, 1 + 1, 1], [1 + 2, 1 + 2, 1]]
+    ),
 }
 
+
 def patterns(patterns_reps):
-    return ('square,triangle,pentagon,L,' * patterns_reps)[:-1].split(',')
+    return ("square,triangle,pentagon,L," * patterns_reps)[:-1].split(",")
+
 
 def create_constellations(
-        size_n=1,
-        shuffle_corners=True,
-        gaussian_noise=0.,
-        max_translation=1.,
-        max_rot=0.0,
-        max_upscale=0.0,
-        which_patterns='all',
-        drop_prob=0.0,
-        rng=None,
-        **unused_kwargs
+    size_n=1,
+    shuffle_corners=True,
+    gaussian_noise=0.0,
+    max_translation=1.0,
+    max_rot=0.0,
+    max_upscale=0.0,
+    which_patterns="all",
+    drop_prob=0.0,
+    rng=None,
+    **unused_kwargs
 ):
     """Creates a batch of data using numpy.
     Args:
@@ -77,18 +79,19 @@ def create_constellations(
     if rng is None:
         rng = np.random
 
-    if which_patterns == 'basic':
-        which_patterns = 'square triangle'.split()
+    if which_patterns == "basic":
+        which_patterns = "square triangle".split()
 
-    elif which_patterns == 'all':
+    elif which_patterns == "all":
         which_patterns = list(PATTERNS.keys())
 
     elif isinstance(which_patterns, str):
         if which_patterns in PATTERNS:
             which_patterns = [which_patterns]
         else:
-            raise ValueError('Pattern "{}" has not been '
-                             'implemented.'.format(which_patterns))
+            raise ValueError(
+                'Pattern "{}" has not been ' "implemented.".format(which_patterns)
+            )
 
     caps_dim = list(PATTERNS.values())[0].shape[1]
     transformations = []
@@ -101,7 +104,8 @@ def create_constellations(
         corners = centers.copy()
 
         corner_trans = np.zeros(
-            (PATTERNS[which_patterns[i]].shape[0], caps_dim, caps_dim))
+            (PATTERNS[which_patterns[i]].shape[0], caps_dim, caps_dim)
+        )
 
         corner_trans[:, -1, :] = PATTERNS[which_patterns[i]]
         corner_trans[:, :-1, :-1] = np.eye(caps_dim - 1)
@@ -112,9 +116,9 @@ def create_constellations(
         transformation[:, :, -1] = [0, 0, 1]
 
         # [pi/2, pi]
-        degree = (rng.random((size_n)) - .5) * 2. * np.pi * max_rot
-        scale = 1. + rng.random((size_n)) * max_upscale
-        translation = rng.random((size_n, 2)) * 24. * max_translation
+        degree = (rng.random((size_n)) - 0.5) * 2.0 * np.pi * max_rot
+        scale = 1.0 + rng.random((size_n)) * max_upscale
+        translation = rng.random((size_n, 2)) * 24.0 * max_translation
         transformation[:, 0, 0] = np.cos(degree) * scale
         transformation[:, 1, 1] = np.cos(degree) * scale
         transformation[:, 0, 1] = np.sin(degree) * scale
@@ -123,11 +127,9 @@ def create_constellations(
 
         corners = np.matmul(corners, transformation)
 
-        random_pattern_choice = rng.binomial(1, 1. - drop_prob,
-                                             (corners.shape[0], 1))
+        random_pattern_choice = rng.binomial(1, 1.0 - drop_prob, (corners.shape[0], 1))
 
-        random_corner_choice = np.tile(
-            random_pattern_choice, (1, corners.shape[1]))
+        random_corner_choice = np.tile(random_pattern_choice, (1, corners.shape[1]))
 
         all_corner_presence.append(random_corner_choice)
         all_pattern_presence.append(random_pattern_choice)
@@ -140,7 +142,7 @@ def create_constellations(
 
     pattern_ids = []
     current_pattern_id = 0
-    pattern_class_count = collections.defaultdict(lambda: 0.)
+    pattern_class_count = collections.defaultdict(lambda: 0.0)
     for i, pattern in enumerate(which_patterns):
         corner_ids = [current_pattern_id] * len(PATTERNS[pattern])
         pattern_ids.extend(corner_ids)
@@ -163,23 +165,27 @@ def create_constellations(
             all_corner_presence[i] = all_corner_presence[i][p]
             pattern_ids[i] = pattern_ids[i][p]
 
-    if gaussian_noise > 0.:
+    if gaussian_noise > 0.0:
         capsules += rng.normal(scale=gaussian_noise, size=capsules.shape)
 
     # normalize corners
     min_d, max_d = capsules.min(), capsules.max()
-    capsules = (capsules - min_d) / (max_d - min_d + 1e-8) * 2 - 1.
+    capsules = (capsules - min_d) / (max_d - min_d + 1e-8) * 2 - 1.0
 
-    minibatch = dict(corners=capsules, presence=all_corner_presence,
-                     pattern_presence=all_pattern_presence,
-                     pattern_id=pattern_ids,
-                     pattern_class_count=pattern_class_count)
+    minibatch = dict(
+        corners=capsules,
+        presence=all_corner_presence,
+        pattern_presence=all_pattern_presence,
+        pattern_id=pattern_ids,
+        pattern_class_count=pattern_class_count,
+    )
 
     return minibatch
 
 
 def create_dataset(gen_func, epoch_size, transform=None, keys=None, device=None):
     if device is not None:
+
         def device_transform(x):
             return x.to(device)
 
@@ -229,14 +235,24 @@ def load(config):
         trainset = create_dataset(gen_func, epoch_size=config.train_size, transform=lambda x: torch.tensor(x),
                               keys=['corners', 'presence', 'pattern_class_count'])
 
+
         testset = create_dataset(gen_func, epoch_size=config.test_size, transform=lambda x: torch.tensor(x),
                              keys=['corners', 'presence', 'pattern_class_count'])
 
     train_loader = torch.utils.data.DataLoader(
-        trainset, batch_size=config.batch_size, shuffle=True,
-        num_workers=8, pin_memory=True)
-    test_loader = torch.utils.data.DataLoader(
-        testset, batch_size=config.batch_size, shuffle=False,
-        num_workers=8, pin_memory=True)
+        trainset,
+        batch_size=config.batch_size,
+        shuffle=True,
+        num_workers=8,
+        pin_memory=True,
+    )
 
-    return train_loader, test_loader
+    test_loader = torch.utils.data.DataLoader(
+        testset,
+        batch_size=config.batch_size,
+        shuffle=False,
+        num_workers=8,
+        pin_memory=True,
+    )
+
+    return train_loader, test_loader, "constellation"
