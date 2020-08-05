@@ -24,6 +24,7 @@ flags.DEFINE_boolean("shuffle_corners", True, "See `create_constellations`.")
 
 flags.DEFINE_float("pattern_upscale", 0.0, "See `create_constellations`.")
 flags.DEFINE_float("max_rotation", 0.33, "See `create_constellations`.")
+flags.DEFINE_float("global_rotation", 0.0, "See `create_constellations`.")
 flags.DEFINE_float("pattern_drop_prob", 0.5, "See `create_constellations`.")
 flags.DEFINE_integer("patterns_reps", 2, "See `create_constellations`.")
 flags.DEFINE_integer("data_seed", 0, "Seed for data generation.")
