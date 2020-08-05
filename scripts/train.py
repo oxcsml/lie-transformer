@@ -1,3 +1,8 @@
+import sys
+
+sys.path.append('forge')
+sys.path.append('.')
+
 from os import path as osp
 import time
 import torch
@@ -10,6 +15,7 @@ from copy import deepcopy
 import deepdish as dd
 
 from eqv_transformer.train_tools import (
+    rotate,
     log_tensorboard,
     parse_reports,
     print_reports,
@@ -17,7 +23,6 @@ from eqv_transformer.train_tools import (
     save_checkpoint,
     ExponentialMovingAverage,
 )
-
 
 if torch.cuda.is_available():
     device = "cuda"
@@ -76,7 +81,7 @@ flags.DEFINE_float("beta2", 0.9, "Adam Beta 2 parameter")
 #####################################################################################################################
 
 
-# @forge.debug_on(Exception)
+@forge.debug_on(Exception)
 def main():
     # Parse flags
     config = forge.config()
@@ -171,6 +176,9 @@ def main():
                     test_acc = 0.0
                     for data in test_loader:
                         data, presence, target = [d.to(device) for d in data]
+                        if config.data_config == "configs/constellation/constellation.py":
+                            if config.global_rotation != 0.0:
+                                data = rotate(data, config.global_rotation)
                         outputs = model([data, presence], target)
                         test_acc += outputs.acc
 

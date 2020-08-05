@@ -4,6 +4,13 @@ import torch
 from torch import nn
 
 import forge.experiment_tools as fet
+from math import cos, pi, sin
+
+def rotate(X, angle):
+    rotation_matrix = torch.tensor([[cos(angle), -sin(angle)], [sin(angle), cos(angle)]])
+    rotation = rotation_matrix.unsqueeze(0).unsqueeze(0).repeat(X.shape[0], X.shape[1], 1, 1)
+    out = rotation.view(-1, 2, 2).bmm(X.unsqueeze(3).view(-1, 2, 1)).view(X.shape[0], X.shape[1], 2, 1).squeeze(3)
+    return out
 
 
 def parse_reports(report_dict):
@@ -83,7 +90,7 @@ def save_checkpoint(checkpoint_name, epoch, model, opt, lr_sched, loss=None):
         "epoch": epoch,
         "model_state_dict": model.state_dict(),
         "model_optimizer_state_dict": opt.state_dict(),
-        "model_lr_sched_state_dict": lr_sched.state_dict(),
+        #"model_lr_sched_state_dict": lr_sched.state_dict(),
     }
 
     if loss is not None:
