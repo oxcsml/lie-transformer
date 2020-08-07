@@ -25,11 +25,12 @@ flags.DEFINE_boolean(
     "recenter", False, "Recenter the positions of atoms with charge > 0"
 )
 flags.DEFINE_integer("batch_fit", 0, "number of samples to fit to")
+flags.DEFINE_integer("data_seed", 0, "seed to pick data with")
 
 
 def load(config, **unused_kwargs):
 
-    with FixedNumpySeed(0):
+    with FixedNumpySeed(config.data_seed):
         datasets, num_species, charge_scale = QM9datasets(
             os.path.join(config.data_dir, "qm9")
         )
