@@ -58,7 +58,7 @@ def get_checkpoint_iter(checkpoint_iter, checkpoint_dir):
     return max(fet.find_model_files(checkpoint_dir).keys())
 
 
-def load_checkpoint(checkpoint_path, model, opt, lr_sched):
+def load_checkpoint(checkpoint_path, model, opt, lr_sched=None):
     print("Restoring checkpoint from '{}'".format(checkpoint_path))
     checkpoint = torch.load(checkpoint_path)
     # Restore model
@@ -68,14 +68,15 @@ def load_checkpoint(checkpoint_path, model, opt, lr_sched):
     opt.load_state_dict(checkpoint["model_optimizer_state_dict"])
 
     # Restore LR schedule
-    lr_sched.load_state_dict(checkpoint["model_lr_sched_state_dict"])
+    if lr_sched is not None:
+        lr_sched.load_state_dict(checkpoint["model_lr_sched_state_dict"])
 
     # Update starting epoch
     start_epoch = checkpoint["epoch"] + 1
     return start_epoch
 
 
-def save_checkpoint(checkpoint_name, epoch, model, opt, lr_sched, loss=None):
+def save_checkpoint(checkpoint_name, epoch, model, opt, lr_sched=None, loss=None):
     epoch_ckpt_file = "{}-{}".format(checkpoint_name, epoch)
     print("Saving model training checkpoint to {}".format(epoch_ckpt_file))
 
@@ -83,7 +84,9 @@ def save_checkpoint(checkpoint_name, epoch, model, opt, lr_sched, loss=None):
         "epoch": epoch,
         "model_state_dict": model.state_dict(),
         "model_optimizer_state_dict": opt.state_dict(),
-        "model_lr_sched_state_dict": lr_sched.state_dict(),
+        "model_lr_sched_state_dict": lr_sched.state_dict()
+        if lr_sched is not None
+        else None,
     }
 
     if loss is not None:

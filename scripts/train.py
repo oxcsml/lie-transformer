@@ -87,15 +87,18 @@ def main():
     # Load model
     model, model_name = fet.load(config.model_config, config)
     model = model.to(device)
+    print(model)
 
     # Prepare environment
-    results_folder_name = (
+    run_name = (
         config.run_name
         + "_bs"
         + str(config.batch_size)
         + "_lr"
         + str(config.learning_rate)
     )
+
+    results_folder_name = osp.join(data_name, model_name, run_name,)
 
     logdir = osp.join(config.results_dir, results_folder_name.replace(".", "_"))
     logdir, resume_checkpoint = fet.init_checkpoint(
@@ -133,7 +136,7 @@ def main():
     report_all = {}
     # Saving model at epoch 0 before training
     print("saving model at epoch 0 before training ... ")
-    save_checkpoint(checkpoint_name, 0, model, model_opt, 0.0)
+    save_checkpoint(checkpoint_name, 0, model, model_opt, loss=0.0)
     print("finished saving model at epoch 0 before training")
 
     # Training
@@ -153,7 +156,7 @@ def main():
             model_opt.step()
 
             if config.log_train_values:
-                reports = train_emas(parse_reports(outputs.reports))
+                reports = parse_reports(outputs.reports)
                 if batch_idx % config.report_loss_every == 0:
                     log_tensorboard(summary_writer, train_iter, reports, "train/")
                     print_reports(
@@ -201,12 +204,14 @@ def main():
 
             if train_iter % config.save_check_points == 0:
                 save_checkpoint(
-                    checkpoint_name, train_iter, model, model_opt, outputs.loss
+                    checkpoint_name, train_iter, model, model_opt, loss=outputs.loss
                 )
 
         dd.io.save(logdir + "/results_dict.h5", report_all)
 
-        save_checkpoint(checkpoint_name, train_iter, model, model_opt, outputs.loss)
+        save_checkpoint(
+            checkpoint_name, train_iter, model, model_opt, loss=outputs.loss
+        )
 
 
 if __name__ == "__main__":
