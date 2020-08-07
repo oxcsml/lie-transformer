@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from einops import rearrange, reduce
 
 from lie_conv.lieGroups import SE3
-from lie_conv.lieConv import GlobalPool, Swish
+from lie_conv.lieConv import Swish
 from lie_conv.utils import Pass, Expression
 from lie_conv.masked_batchnorm import MaskBatchNormNd
 from eqv_transformer.multihead_neural import MultiheadWeightNet
@@ -130,10 +130,6 @@ class EquivairantMultiheadAttention(nn.Module):
         self.input_linear = nn.Linear(c_in, c_out)
         self.output_linear = nn.Linear(c_out, c_out)
 
-        if layer_norm:
-            self.ln_1 = nn.LayerNorm(c_out)
-            self.ln_2 = nn.LayerNorm(c_out)
-
     def extract_neighbourhoods(self, input, query_indices=None):
         """ Extracts which points each other point is to attend to based on distance, or graph structure
         
@@ -192,7 +188,7 @@ class EquivairantMultiheadAttention(nn.Module):
             nbhd_idx,
         ) = self.extract_neighbourhoods(input)
 
-        # Expand across head dimension TODO: possibly waseful and could avoid with a special linear layer
+        # Expand across head dimension TODO: possibly wasteful and could avoid with a special linear layer
         # (bs, n * ns, nbhd_size, g_dim) -> (bs, n * ns, nbhd_size, h, g_dim)
         nbhd_pairwise_g = nbhd_pairwise_g.unsqueeze(-2).repeat(1, 1, 1, self.n_heads, 1)
         # Exapand the mask along the head dim
@@ -202,8 +198,8 @@ class EquivairantMultiheadAttention(nn.Module):
         presoftmax_weights = self.kernel(
             nbhd_pairwise_g, nbhd_mask, coset_functions, coset_functions, nbhd_idx
         )
-        # presoftmax_weights = torch.exp(presoftmax_weights)
-        # Zero out the correct channels
+
+        # Make masked areas very small attention weights
         presoftmax_weights = torch.where(
             # (bs, n * ns, nbhd_size) -> (bs, n * ns, nbhd_size, 1). Constant along head dim
             nbhd_mask,
@@ -216,50 +212,105 @@ class EquivairantMultiheadAttention(nn.Module):
 
         # Compute the normalised attention weights
         # (bs, n * ns, nbhd_size, h) -> (bs, n * ns, nbhd_size, h)
-        # softmax_attention = presoftmax_weights / presoftmax_weights.sum(
-        #     dim=(2), keepdim=True
-        # )
         softmax_attention = F.softmax(presoftmax_weights, dim=2)
 
         # Pass the inputs through the value linear layer
         # (bs, n * ns, nbhd_size, c_in) -> (bs, n * ns, nbhd_size, c_out)
         nbhd_coset_functions = self.input_linear(nbhd_coset_functions)
-        coset_functions = self.input_linear(coset_functions)
+
         # Split the features into heads
         nbhd_coset_functions = rearrange(
             nbhd_coset_functions, "b n m (h d) -> b n m h d", h=self.n_heads
-        )
-        coset_functions = rearrange(
-            coset_functions, "b n (h d) -> b n h d", h=self.n_heads
         )
 
         # Sum over the coefficients
         # TODO: Currently allows self interaction in the attention sum. Some pre matrices?
         # (bs, n * ns, nbhd_size, h), (bs, n * ns, nbhd_size, h, c_out / h) -> (bs, n * ns, nbhd_size, h)
-        coset_functions = coset_functions + (
-            softmax_attention.unsqueeze(-1) * nbhd_coset_functions
-        ).sum(dim=2)
-
-        coset_functions = rearrange(coset_functions, "b n h d -> b n (h d)")
-
-        # Apply the output matrix and possibly layernorm
-        # (bs, n * ns, h * c_in) -> (bs, n * ns, h * c_in)
-        coset_functions = (
-            coset_functions
-            if getattr(self, "ln_1", None) is None
-            else self.ln_1(coset_functions)
+        coset_functions = (softmax_attention.unsqueeze(-1) * nbhd_coset_functions).sum(
+            dim=2
         )
-        # (bs, n * ns, h * c_in) -> (bs, n * ns, c_out)
-        coset_functions = self.output_linear(coset_functions)
-        # (bs, n * ns, c_out) -> (bs, n * ns, c_out)
-        coset_functions = (
-            coset_functions
-            if getattr(self, "ln_2", None) is None
-            else self.ln_2(coset_functions)
+
+        coset_functions = self.output_linear(
+            rearrange(coset_functions, "b n h d -> b n (h d)")
         )
 
         # ( (bs, n * ns, n * ns, g_dim), (bs, n * ns, c_out), (bs, n * ns) )
         return (pairwise_g, coset_functions, mask)
+
+
+class EquivariantTransformerBlock(nn.Module):
+    def __init__(
+        self,
+        dim,
+        n_heads,
+        group,
+        layer_norm=False,
+        kernel_dim=16,
+        kernel_act="swish",
+        batch_norm=False,
+    ):
+        super().__init__()
+        self.ema = EquivairantMultiheadAttention(
+            dim,
+            dim,
+            n_heads,
+            group,
+            layer_norm=layer_norm,
+            kernel_dim=kernel_dim,
+            act=kernel_act,
+            bn=batch_norm,
+        )
+        self.mlp = nn.Sequential(nn.Linear(dim, dim), Swish(), nn.Linear(dim, dim))
+
+        if layer_norm:
+            self.ln_ema = nn.LayerNorm(dim)
+            self.ln_mlp = nn.LayerNorm(dim)
+
+    def forward(self, lifted_data):
+        pairwise_g, coset_functions, mask = lifted_data
+
+        # optional layer norm
+        if getattr(self, "ln_ema", None) is not None:
+            # equivariant attention with residual connection
+            coset_functions = (
+                coset_functions
+                + self.ema((pairwise_g, self.ln_ema(coset_functions), mask))[1]
+            )
+        else:
+            coset_functions = coset_functions + self.ema(
+                (pairwise_g, coset_functions, mask)
+            )
+
+        # optional layer norm
+        if getattr(self, "ln_mlp", None) is not None:
+            coset_functions = coset_functions + self.mlp(self.ln_mlp(coset_functions))
+        else:
+            coset_functions = coset_functions + self.mlp(coset_functions)
+
+        return (pairwise_g, coset_functions, mask)
+
+
+class GlobalPool(nn.Module):
+    """computes values reduced over all spatial locations (& group elements) in the mask"""
+
+    def __init__(self, mean=False):
+        super().__init__()
+        self.mean = mean
+
+    def forward(self, x):
+        """x [xyz (bs,n,d), vals (bs,n,c), mask (bs,n)]"""
+        if len(x) == 2:
+            return x[1].mean(1)
+        coords, vals, mask = x
+        summed = torch.where(mask.unsqueeze(-1), vals, torch.zeros_like(vals)).sum(1)
+        if self.mean:
+            summed_mask = mask.sum(-1).unsqueeze(-1)
+            summed_mask = torch.where(
+                summed_mask == 0, torch.ones_like(summed_mask), summed_mask
+            )
+            summed /= summed_mask
+
+        return summed
 
 
 class EquivariantTransformer(nn.Module):
@@ -287,22 +338,29 @@ class EquivariantTransformer(nn.Module):
         if isinstance(num_heads, int):
             num_heads = [num_heads] * num_layers
 
-        attention = lambda c_in, c_out, n_head: EquivairantMultiheadAttention(
-            c_in, c_out, n_head, group, layer_norm, kernel_dim, kernel_act, batch_norm
+        attention_block = lambda dim, n_head: EquivariantTransformerBlock(
+            dim,
+            n_head,
+            group,
+            layer_norm=layer_norm,
+            kernel_dim=kernel_dim,
+            kernel_act=kernel_act,
+            batch_norm=batch_norm,
         )
 
         self.net = nn.Sequential(
             Pass(nn.Linear(dim_input, dim_hidden[0]), dim=1),
-            *[
-                attention(dim_hidden[i], dim_hidden[i + 1], num_heads[i])
-                for i in range(num_layers)
-            ],
-            # MaskBatchNormNd(dim_hidden[-1]) if batch_norm else nn.Sequential(),
-            Pass(Swish() if kernel_act == "swish" else nn.ReLU()),
-            Pass(nn.Linear(dim_hidden[-1], dim_output), dim=1),
+            *[attention_block(dim_hidden[i], num_heads[i]) for i in range(num_layers)],
             GlobalPool(mean=global_pool_mean)
             if global_pool
             else Expression(lambda x: x[1]),
+            nn.Sequential(
+                nn.Linear(dim_hidden[-1], dim_hidden[-1]),
+                Swish(),
+                nn.Linear(dim_hidden[-1], dim_hidden[-1]),
+                Swish(),
+                nn.Linear(dim_hidden[-1], dim_output),
+            )
         )
 
         self.group = group
@@ -311,3 +369,4 @@ class EquivariantTransformer(nn.Module):
     def forward(self, input):
         lifted_data = self.group.lift(input, self.liftsamples)
         return self.net(lifted_data)
+
