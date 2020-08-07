@@ -1,11 +1,21 @@
+"""
+This version of constellation data generation is based on the previous one.
+There are two important changes:
+    1. The dataset is not "online", i.e. generated on the go. So the size is fixed. 
+    2. The constellations shapes are created using roots of unity, for better visualization.
+"""
+
 import collections
 import functools
 import numpy as np
-
+import tensorflow as tf
 import torch
 from torchvision import transforms
-
+import ipdb
 from forge import flags
+import pickle
+import os
+import json
 
 flags.DEFINE_integer("train_size", 100000, "Number of training examples per epoch.")
 flags.DEFINE_integer("test_size", 10000, "Number of testing examples per epoch.")
@@ -13,134 +23,34 @@ flags.DEFINE_float("corner_noise", 0.1, "See `create_constellations`.")
 flags.DEFINE_boolean("shuffle_corners", True, "See `create_constellations`.")
 
 flags.DEFINE_float("pattern_upscale", 0.0, "See `create_constellations`.")
-flags.DEFINE_float("max_rotation_train", 0.33, "See `create_constellations`.")
+flags.DEFINE_float("max_rotation", 0.33, "See `create_constellations`.")
+flags.DEFINE_float("global_rotation", 0.0, "See `create_constellations`.")
 flags.DEFINE_float("pattern_drop_prob", 0.5, "See `create_constellations`.")
-flags.DEFINE_string(
-    "patterns_train",
-    "square,square,triangle,triangle,pentagon,pentagon,L,L",
-    "See `create_constellations`.",
-)
+flags.DEFINE_integer("patterns_reps", 2, "See `create_constellations`.")
+flags.DEFINE_integer("data_seed", 0, "Seed for data generation.")
 
-flags.DEFINE_float("max_rotation_test", 0.33, "See `create_constellations`.")
-flags.DEFINE_string(
-    "patterns_test",
-    "square,square,triangle,triangle,pentagon,pentagon,L,L",
-    "See `create_constellations`.",
-)
+
+def roots_of_unity(n):
+    x_coors = np.cos(2 * np.pi / n * np.arange(n)[..., np.newaxis])
+    y_coors = np.sin(2 * np.pi / n * np.arange(n)[..., np.newaxis])
+
+    coors = np.concatenate([x_coors, y_coors, np.tile([[1]], (n, 1))], axis=1)
+
+    return coors
+
 
 PATTERNS = {
-    "square": [[1 + 2, 1 + 2, 1], [1, 1, 1], [1 + 2, 1, 1], [1, 1 + 2, 1]],
-    "triangle": [[1, 1 + 1, 1], [1 + 2, 1, 1], [1 + 2, 1 + 2, 1]],
-    "pentagon": [
-        [1, 1, 1],
-        [1 + 1, 1 - 2, 1],
-        [1 + 2, 1 - 1, 1],
-        [1 + 2, 1 + 1, 1],
-        [1 + 1, 1 + 2, 1],
-    ],
-    "L": [
-        [1, 1, 1],
-        [1 + 1, 1, 1],
-        [1 + 2, 1, 1],
-        [1 + 2, 1 + 1, 1],
-        [1 + 2, 1 + 2, 1],
-    ],
+    "triangle": roots_of_unity(3) + 2,
+    "square": roots_of_unity(4) + 2,
+    "pentagon": roots_of_unity(5) + 2,
+    "L": np.asarray(
+        [[1, 1, 1], [1 + 1, 1, 1], [1 + 2, 1, 1], [1 + 2, 1 + 1, 1], [1 + 2, 1 + 2, 1]]
+    ),
 }
-PATTERNS = {k: np.asarray(v) for k, v in PATTERNS.items()}
 
 
-def load(config, **unused_kwargs):
-    del unused_kwargs
-
-    gen_func_train = functools.partial(
-        create_constellations,
-        shuffle_corners=config.shuffle_corners,
-        gaussian_noise=config.corner_noise,
-        max_rot=config.max_rotation_train,
-        max_upscale=config.pattern_upscale,
-        drop_prob=config.pattern_drop_prob,
-        which_patterns=config.patterns_train.split(","),
-    )
-
-    trainset = IteratorWrapper(
-        gen_func_train,
-        epoch_size=config.train_size,
-        transform=lambda x: torch.tensor(x),
-        keys=["corners", "presence", "pattern_class_count"],
-    )
-
-    train_loader = torch.utils.data.DataLoader(
-        trainset,
-        batch_size=config.batch_size,
-        shuffle=False,
-        num_workers=8,
-        pin_memory=True,
-    )
-
-    gen_func_test = functools.partial(
-        create_constellations,
-        shuffle_corners=config.shuffle_corners,
-        gaussian_noise=config.corner_noise,
-        max_rot=config.max_rotation_test,
-        max_upscale=config.pattern_upscale,
-        drop_prob=config.pattern_drop_prob,
-        which_patterns=config.patterns_test.split(","),
-    )
-
-    # if config.test_size == config.train_size:
-    # test_loader = train_loader
-    # else:
-    testset = IteratorWrapper(
-        gen_func_test,
-        epoch_size=config.test_size,
-        transform=lambda x: torch.tensor(x),
-        keys=["corners", "presence", "pattern_class_count"],
-    )
-
-    test_loader = torch.utils.data.DataLoader(
-        testset,
-        batch_size=config.batch_size,
-        shuffle=False,
-        num_workers=8,
-        pin_memory=True,
-    )
-
-    return train_loader, test_loader, "constellation"
-
-
-class IteratorWrapper:
-    def __init__(self, gen_func, epoch_size, transform=None, keys=None, device=None):
-        self.gen_func = gen_func
-        self.epoch_size = epoch_size
-
-        if device is not None:
-
-            def device_transform(x):
-                return x.to(device)
-
-            transform = transforms.Compose([transform, device_transform])
-
-        self.transform = transform
-        self.keys = keys
-
-    def __getitem__(self, item):
-        if item >= self.epoch_size:
-            raise StopIteration
-
-        res = self.gen_func()
-        if self.keys is not None:
-            res = [res[k] for k in self.keys]
-        else:
-            res = list(res.values())
-
-        if self.transform is not None:
-            res = [self.transform(v) for v in res]
-
-        res = [r.squeeze(0) for r in res]
-        return res
-
-    def __len__(self):
-        return self.epoch_size
+def patterns(patterns_reps):
+    return ("square,triangle,pentagon,L," * patterns_reps)[:-1].split(",")
 
 
 def create_constellations(
@@ -152,6 +62,8 @@ def create_constellations(
     max_upscale=0.0,
     which_patterns="all",
     drop_prob=0.0,
+    rng=None,
+    **unused_kwargs
 ):
     """Creates a batch of data using numpy.
     Args:
@@ -164,6 +76,9 @@ def create_constellations(
         which_patterns: 'all', 'basic' or a list of strings with pattern names, see PATTERNS.
         drop_prob: float in [0. 1.], probability of dropping out a pattern.
     """
+
+    if rng is None:
+        rng = np.random
 
     if which_patterns == "basic":
         which_patterns = "square triangle".split()
@@ -202,9 +117,9 @@ def create_constellations(
         transformation[:, :, -1] = [0, 0, 1]
 
         # [pi/2, pi]
-        degree = (np.random.random((size_n)) - 0.5) * 2.0 * np.pi * max_rot
-        scale = 1.0 + np.random.random((size_n)) * max_upscale
-        translation = np.random.random((size_n, 2)) * 24.0 * max_translation
+        degree = (rng.random((size_n)) - 0.5) * 2.0 * np.pi * max_rot
+        scale = 1.0 + rng.random((size_n)) * max_upscale
+        translation = rng.random((size_n, 2)) * 24.0 * max_translation
         transformation[:, 0, 0] = np.cos(degree) * scale
         transformation[:, 1, 1] = np.cos(degree) * scale
         transformation[:, 0, 1] = np.sin(degree) * scale
@@ -213,9 +128,7 @@ def create_constellations(
 
         corners = np.matmul(corners, transformation)
 
-        random_pattern_choice = np.random.binomial(
-            1, 1.0 - drop_prob, (corners.shape[0], 1)
-        )
+        random_pattern_choice = rng.binomial(1, 1.0 - drop_prob, (corners.shape[0], 1))
 
         random_corner_choice = np.tile(random_pattern_choice, (1, corners.shape[1]))
 
@@ -248,13 +161,13 @@ def create_constellations(
 
     if shuffle_corners:
         for i in range(capsules.shape[0]):
-            p = np.random.permutation(len(capsules[i]))
+            p = rng.permutation(len(capsules[i]))
             capsules[i] = capsules[i][p]
             all_corner_presence[i] = all_corner_presence[i][p]
             pattern_ids[i] = pattern_ids[i][p]
 
     if gaussian_noise > 0.0:
-        capsules += np.random.normal(scale=gaussian_noise, size=capsules.shape)
+        capsules += rng.normal(scale=gaussian_noise, size=capsules.shape)
 
     # normalize corners
     min_d, max_d = capsules.min(), capsules.max()
@@ -269,3 +182,78 @@ def create_constellations(
     )
 
     return minibatch
+
+
+def create_dataset(gen_func, epoch_size, transform=None, keys=None, device=None):
+    if device is not None:
+
+        def device_transform(x):
+            return x.to(device)
+
+        transform = transforms.Compose([transform, device_transform])
+
+    def create_one_datapoint():
+        res = gen_func()
+        if keys is not None:
+            res = [res[k] for k in keys]
+        else:
+            res = list(res.values())
+
+        if transform is not None:
+            res = [transform(v) for v in res]
+
+        res = [r.squeeze(0) for r in res]
+        return res
+
+    data_list = [create_one_datapoint() for _ in range(epoch_size)]
+
+    return data_list
+
+
+def load(config):
+
+    train_path = os.path.join(config.data_dir, 'constellation/train_{}_{}.pkl'.format(config.train_size, config.patterns_reps))
+    test_path = os.path.join(config.data_dir, 'constellation/test_{}_{}.pkl'.format(config.test_size, config.patterns_reps))
+
+    if tf.io.gfile.exists(train_path) and tf.io.gfile.exists(test_path):
+        with tf.io.gfile.GFile(train_path, 'rb') as f:
+            trainset = pickle.load(f)
+        with tf.io.gfile.GFile(test_path, 'rb') as f:
+            testset = pickle.load(f)
+
+    else:
+        gen_func = functools.partial(create_constellations,
+                                 shuffle_corners=config.shuffle_corners,
+                                 gaussian_noise=config.corner_noise,
+                                 max_rot=config.max_rotation,
+                                 max_upscale=config.pattern_upscale,
+                                 drop_prob=config.pattern_drop_prob,
+                                 which_patterns=patterns(config.patterns_reps),
+                                 rng=np.random.RandomState(
+                                     seed=config.data_seed)
+                                 )
+
+        trainset = create_dataset(gen_func, epoch_size=config.train_size, transform=lambda x: torch.tensor(x),
+                              keys=['corners', 'presence', 'pattern_class_count'])
+
+
+        testset = create_dataset(gen_func, epoch_size=config.test_size, transform=lambda x: torch.tensor(x),
+                             keys=['corners', 'presence', 'pattern_class_count'])
+
+    train_loader = torch.utils.data.DataLoader(
+        trainset,
+        batch_size=config.batch_size,
+        shuffle=True,
+        num_workers=8,
+        pin_memory=True,
+    )
+
+    test_loader = torch.utils.data.DataLoader(
+        testset,
+        batch_size=config.batch_size,
+        shuffle=False,
+        num_workers=8,
+        pin_memory=True,
+    )
+
+    return train_loader, test_loader, "constellation"

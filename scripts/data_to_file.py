@@ -3,44 +3,45 @@ import sys
 sys.path.append('forge')
 sys.path.append('.')
 import os
+import functools
 import pickle
+import numpy as np
 import forge
 from forge import flags
-import ipdb
-from configs.constellation import create_constellations
+import torch
+
+from configs.constellation.constellation import create_constellations, create_dataset, patterns
 import tensorflow as tf
 config = forge.config()
 
 def generate_examples(path):
-    trainset = create_constellations(size_n=config.train_size, shuffle_corners=config.shuffle_corners, gaussian_noise=config.corner_noise,
-        max_rot=config.max_rotation_train,
-        max_upscale=config.pattern_upscale,
-        drop_prob=config.pattern_drop_prob,
-        which_patterns=config.patterns_train.split(','),
-        )
+    gen_func = functools.partial(create_constellations,
+                             shuffle_corners=config.shuffle_corners,
+                             gaussian_noise=config.corner_noise,
+                             max_rot=config.max_rotation,
+                             max_upscale=config.pattern_upscale,
+                             drop_prob=config.pattern_drop_prob,
+                             which_patterns=patterns(config.patterns_reps),
+                             rng=np.random.RandomState(
+                                 seed=config.data_seed)
+                             )
 
-    testset = create_constellations(size_n=config.test_size, shuffle_corners=config.shuffle_corners,
-        gaussian_noise=config.corner_noise,
-        max_rot=config.max_rotation_test,
-        max_upscale=config.pattern_upscale,
-        drop_prob=config.pattern_drop_prob,
-        which_patterns=config.patterns_test.split(','),
-        )
+    trainset = create_dataset(gen_func, epoch_size=config.train_size, transform=lambda x: torch.tensor(x),
+                          keys=['corners', 'presence', 'pattern_class_count'])
 
+    testset = create_dataset(gen_func, epoch_size=config.test_size, transform=lambda x: torch.tensor(x),
+                         keys=['corners', 'presence', 'pattern_class_count'])
 
-    train_data = trainset['corners'], trainset['presence'], trainset['pattern_class_count']
-    test_data = testset['corners'], testset['presence'], testset['pattern_class_count']
-
-    train_path = os.path.join(path, 'train.pkl')
-    test_path = os.path.join(path, 'test.pkl')
+    train_path = os.path.join(path, 'train_{}_{}.pkl'.format(config.train_size, config.patterns_reps))
+    test_path = os.path.join(path, 'test_{}_{}.pkl'.format(config.test_size, config.patterns_reps))
 
     with tf.gfile.GFile(train_path, 'w') as f:
-       pickle.dump(train_data, f)
+       pickle.dump(trainset, f)
 
     with tf.gfile.GFile(test_path, 'w') as f:
-        pickle.dump(test_data, f)
+        pickle.dump(testset, f)
 
 if __name__ == '__main__':
-    generate_examples('/Users/charlinelelan/eqv_transformer/data/constellation')
+    generate_examples('./data/constellation')
 
 
