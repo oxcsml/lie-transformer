@@ -244,7 +244,7 @@ def load(config):
         trainset,
         batch_size=config.batch_size,
         shuffle=True,
-        num_workers=8,
+        num_workers=0,
         pin_memory=True,
     )
 
@@ -252,7 +252,7 @@ def load(config):
         testset,
         batch_size=config.batch_size,
         shuffle=False,
-        num_workers=8,
+        num_workers=0,
         pin_memory=True,
     )
 
