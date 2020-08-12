@@ -23,10 +23,15 @@ the dataset are available in the respective config files. The project is using
 
 ### Counting patterns in the constellation dataset
 
-Currently, the only implemented task is counting patterns in the constellation dataset. By default, we generate
-a dataset of constellations on-line (new examples are generated randomly all the time), where each constellation
+Currently, the only implemented task is counting patterns in the constellation dataset. We generate
+a fixed dataset of constellations, where each constellation
 consists of 0-8 patterns; each pattern consists of corners of a shape. Currently available shapes are triangle,
 square, pentagon and an L. The task is to count the number of occurences of each pattern.
+To save to file the constellation datasets, run before training:
+```
+python3 scripts/data_to_file.py
+```
+Else, the constellation datasets are regenerated at the beginning of the training.
 
 #### Dataset and model consistency
 When changing the dataset parameters (e.g. number of patterns, types of patterns etc) make sure that the model
