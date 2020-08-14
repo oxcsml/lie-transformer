@@ -76,7 +76,7 @@ flags.DEFINE_float(
 
 # Optimization
 flags.DEFINE_integer("train_epochs", 200, "Maximum number of training epochs.")
-flags.DEFINE_integer("batch_size", 128, "Mini-batch size.")
+flags.DEFINE_integer("batch_size", 90, "Mini-batch size.")
 flags.DEFINE_float("learning_rate", 1e-5, "SGD learning rate.")
 flags.DEFINE_float("beta1", 0.5, "Adam Beta 1 parameter")
 flags.DEFINE_float("beta2", 0.9, "Adam Beta 2 parameter")
