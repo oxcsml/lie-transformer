@@ -1,3 +1,4 @@
+# %%
 import sys
 
 sys.path.append('forge')
@@ -18,6 +19,7 @@ from eqv_transformer.train_tools import (
     rotate,
     log_tensorboard,
     parse_reports,
+    parse_reports_cpu,
     print_reports,
     load_checkpoint,
     save_checkpoint,
@@ -28,6 +30,8 @@ if torch.cuda.is_available():
     device = "cuda"
 else:
     device = "cpu"
+
+# %%
 
 #####################################################################################################################
 # Command line flags
@@ -50,7 +54,7 @@ flags.DEFINE_string(
     "Path to a model config file.",
 )
 # Job management
-flags.DEFINE_string("run_name", "test", "Name of this job and name of results folder.")
+flags.DEFINE_string("run_name", "main", "Name of this job and name of results folder.")
 flags.DEFINE_boolean("resume", False, "Tries to resume a job if True.")
 
 # Logging
@@ -72,7 +76,7 @@ flags.DEFINE_float(
 
 # Optimization
 flags.DEFINE_integer("train_epochs", 200, "Maximum number of training epochs.")
-flags.DEFINE_integer("batch_size", 5, "Mini-batch size.")
+flags.DEFINE_integer("batch_size", 128, "Mini-batch size.")
 flags.DEFINE_float("learning_rate", 1e-5, "SGD learning rate.")
 flags.DEFINE_float("beta1", 0.5, "Adam Beta 1 parameter")
 flags.DEFINE_float("beta2", 0.9, "Adam Beta 2 parameter")
@@ -138,6 +142,7 @@ def main():
     # Setup tensorboard writing
     summary_writer = SummaryWriter(logdir)
 
+    train_reports = []
     report_all = {}
     # Saving model at epoch 0 before training
     print("saving model at epoch 0 before training ... ")
@@ -145,7 +150,7 @@ def main():
     print("finished saving model at epoch 0 before training")
 
     # Training
-    start_t = time.perf_counter()
+    start_t = time.time()
     if config.log_train_values:
         train_emas = ExponentialMovingAverage(alpha=config.ema_alpha, debias=True)
 
@@ -159,6 +164,8 @@ def main():
             model_opt.zero_grad()
             outputs.loss.backward(retain_graph=False)
             model_opt.step()
+
+            train_reports.append(parse_reports_cpu(outputs.reports))
 
             if config.log_train_values:
                 reports = parse_reports(outputs.reports)
@@ -175,20 +182,23 @@ def main():
 
             # Logging
             if batch_idx % config.evaluate_every == 0:
-                with torch.no_grad():
-                    test_acc = 0.0
-                    for data in test_loader:
-                        data, presence, target = [d.to(device) for d in data]
-                        if config.data_config == "configs/constellation/constellation.py":
-                            if config.global_rotation != 0.0:
-                                data = rotate(data, config.global_rotation)
-                        outputs = model([data, presence], target)
-                        test_acc += outputs.acc
+                reports = None
+                for data in test_loader:
+                    data, presence, target = [d.to(device) for d in data]
+                    outputs = model([data, presence], target)
+                    outputs.reports.acc = outputs.acc
 
-                outputs["reports"].cls_acc = test_acc / len(test_loader)
+                    if reports is None:
+                        reports = {k: v.detach().clone().cpu() for k, v in outputs.reports.items()}
+                    else:
+                        for k, v in outputs.reports.items():
+                            reports[k] += v.detach().clone().cpu()
 
-                reports = parse_reports(outputs.reports)
-                reports["time"] = time.perf_counter() - start_t
+                for k, v in reports.items():
+                    reports[k] = v / len(test_loader)
+
+                reports = parse_reports(reports)
+                reports['time'] = time.time() - start_t
                 if report_all == {}:
                     report_all = deepcopy(reports)
 
@@ -215,8 +225,9 @@ def main():
                     checkpoint_name, train_iter, model, model_opt, loss=outputs.loss
                 )
 
+        dd.io.save(logdir + '/train_results.h5', train_reports)
         dd.io.save(logdir + "/results_dict.h5", report_all)
-
+        
         save_checkpoint(
             checkpoint_name, train_iter, model, model_opt, loss=outputs.loss
         )
@@ -224,3 +235,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# %%

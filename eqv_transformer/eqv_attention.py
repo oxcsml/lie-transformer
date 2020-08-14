@@ -279,7 +279,7 @@ class EquivariantTransformerBlock(nn.Module):
         else:
             coset_functions = coset_functions + self.ema(
                 (pairwise_g, coset_functions, mask)
-            )
+            )[1]
 
         # optional layer norm
         if getattr(self, "ln_mlp", None) is not None:

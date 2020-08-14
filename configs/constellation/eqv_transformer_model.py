@@ -3,7 +3,7 @@ import torch
 from eqv_transformer.classfier import Classifier
 from eqv_transformer.eqv_attention import EquivariantTransformer
 from lie_conv.lieGroups import SE3, SE2, SO3, T, Trivial
-from lie_conv.datasets import SE3aug
+# from lie_conv.datasets import SE3aug
 
 from forge import flags
 
@@ -17,7 +17,7 @@ flags.DEFINE_integer("dim_hidden", 512, "Dimension of features to use in each la
 flags.DEFINE_string(
     "activation_function", "swish", "Activation function to use in the network"
 )
-flags.DEFINE_boolean("layer_norm", False, "Use layer norm in the layers")
+flags.DEFINE_boolean("layer_norm", True, "Use layer norm in the layers")
 flags.DEFINE_boolean(
     "mean_pooling",
     True,
