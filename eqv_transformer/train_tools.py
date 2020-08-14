@@ -30,6 +30,10 @@ def parse_reports(report_dict):
     }
 
 
+def parse_reports_cpu(report_dict):
+    return {k: v.item() if len(v.shape) == 0 else v.clone().cpu().numpy() for k, v in report_dict.items()}
+
+
 def print_reports(report_dict, start_time, epoch, batch_idx, num_epochs, prefix=""):
 
     reports = ["{}:{:.03f}".format(*item) for item in report_dict.items()]
