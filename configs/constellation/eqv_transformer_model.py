@@ -44,7 +44,7 @@ def pairwise_distance_features(X, presence):
     X_pairs = X.unsqueeze(2).transpose(1, 2) - X.unsqueeze(2)
     X_distances = torch.norm(X_pairs, dim=-1)
     X_distances = torch.where(
-        presence.unsqueeze(-1), X_distances, torch.zeros_like(X_distances)
+        presence.unsqueeze(-2), X_distances, torch.zeros_like(X_distances)
     )
     X_distances = torch.sort(X_distances, dim=-1, descending=True)[0][..., :-1]
     return X_distances
@@ -54,7 +54,7 @@ def pairwise_distance_moment_features(X, presence, n_moments=5):
     X_pairs = X.unsqueeze(2).transpose(1, 2) - X.unsqueeze(2)
     X_distances = torch.norm(X_pairs, dim=-1)
     X_distances = torch.where(
-        presence.unsqueeze(-1), X_distances, torch.zeros_like(X_distances)
+        presence.unsqueeze(-2), X_distances, torch.zeros_like(X_distances)
     )
     X_distance_moments = torch.cat(
         [X_distances.pow(i).sum(dim=-1, keepdim=True) for i in range(1, n_moments + 1)],
