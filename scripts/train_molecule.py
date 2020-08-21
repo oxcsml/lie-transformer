@@ -1,5 +1,7 @@
 from os import path as osp
 import time
+from math import sqrt
+
 import torch
 from torch import optim
 from torch.utils.tensorboard import SummaryWriter
@@ -71,15 +73,13 @@ flags.DEFINE_float(
 )
 
 # Optimization
-flags.DEFINE_integer("train_epochs", 200, "Maximum number of training epochs.")
-flags.DEFINE_integer("batch_size", 5, "Mini-batch size.")
+flags.DEFINE_integer("train_epochs", 500, "Maximum number of training epochs.")
+flags.DEFINE_integer("batch_size", 90, "Mini-batch size.")
 flags.DEFINE_float("learning_rate", 1e-5, "SGD learning rate.")
 flags.DEFINE_float("beta1", 0.5, "Adam Beta 1 parameter")
 flags.DEFINE_float("beta2", 0.9, "Adam Beta 2 parameter")
 flags.DEFINE_string(
-    "lr_schedule",
-    "cosine_warmup",
-    "What learning rate schedule to use. Options: cosine, none",
+    "lr_schedule", "none", "What learning rate schedule to use. Options: cosine, none",
 )
 
 
@@ -147,6 +147,13 @@ def main():
     if config.lr_schedule == "cosine_warmup":
         cos = cosLr(config.train_epochs)
         lr_sched = lambda e: min(e / (0.01 * config.train_epochs), 1) * cos(e)
+    elif config.lr_schedule == "quadratic_warmup":
+        lr_sched = lambda e: min(e / (0.01 * config.train_epochs), 1) * (
+            1.0
+            / sqrt(
+                1.0 + 10000.0 * (e / config.train_epochs)
+            )  # finish at 1/100 of initial lr
+        )
     elif config.lr_schedule == "none":
         lr_sched = lambda e: 1.0
     else:
@@ -239,12 +246,7 @@ def main():
 
             if train_iter % config.save_check_points == 0:
                 save_checkpoint(
-                    checkpoint_name,
-                    train_iter,
-                    model,
-                    model_opt,
-                    lr_schedule,
-                    outputs.loss,
+                    checkpoint_name, epoch, model, model_opt, lr_schedule, outputs.loss,
                 )
 
         # Test model at end of batch
@@ -281,7 +283,7 @@ def main():
 
         # Save a checkpoint
         save_checkpoint(
-            checkpoint_name, train_iter, model, model_opt, lr_schedule, outputs.loss
+            checkpoint_name, epoch, model, model_opt, lr_schedule, outputs.loss
         )
 
 
