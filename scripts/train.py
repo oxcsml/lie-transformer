@@ -176,10 +176,16 @@ def main():
 
             # Logging
             if batch_idx % config.evaluate_every == 0:
-                with torch.no_grad():
+                with torch.no_grad():  # prevents memory accumulation
                     reports = None
                     for data in test_loader:
                         data, presence, target = [d.to(device) for d in data]
+                        if (
+                            config.data_config
+                            == "configs/constellation/constellation.py"
+                        ):
+                            if config.global_rotation != 0.0:
+                                data = rotate(data, config.global_rotation)
                         outputs = model([data, presence], target)
                         outputs.reports.acc = outputs.acc
 
@@ -189,32 +195,18 @@ def main():
                                 for k, v in outputs.reports.items()
                             }
                         else:
-                            for k, v in outputs.reports.items():
-                                reports[k] += v.detach().clone().cpu()
+                            for d in reports.keys():
+                                report_all[d].append(reports[d])
 
-                    for k, v in reports.items():
-                        reports[k] = v / len(test_loader)
-
-                    reports = parse_reports(reports)
-                    reports["time"] = time.time() - start_t
-                    if report_all == {}:
-                        report_all = deepcopy(reports)
-
-                        for d in reports.keys():
-                            report_all[d] = [report_all[d]]
-                    else:
-                        for d in reports.keys():
-                            report_all[d].append(reports[d])
-
-                    log_tensorboard(summary_writer, train_iter, reports, "test/")
-                    print_reports(
-                        reports,
-                        start_t,
-                        epoch,
-                        batch_idx,
-                        len(train_loader.dataset) // config.batch_size,
-                        prefix="test",
-                    )
+                        log_tensorboard(summary_writer, train_iter, reports, "test/")
+                        print_reports(
+                            reports,
+                            start_t,
+                            epoch,
+                            batch_idx,
+                            len(train_loader.dataset) // config.batch_size,
+                            prefix="test",
+                        )
 
             train_iter += 1
 
