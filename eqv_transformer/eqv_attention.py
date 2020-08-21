@@ -106,6 +106,8 @@ class EquivairantMultiheadAttention(nn.Module):
         kernel_dim=16,
         act="swish",
         bn=False,
+        mc_samples=0,
+        fill=1.0,
     ):
 
         super().__init__()
@@ -114,6 +116,9 @@ class EquivairantMultiheadAttention(nn.Module):
         self.c_out = c_out
         self.n_heads = n_heads
         self.group = group
+
+        self.mc_samples = mc_samples
+        self.fill = fill
 
         self.kernel = SumKernel(
             MultiheadWeightNet(
@@ -142,14 +147,43 @@ class EquivairantMultiheadAttention(nn.Module):
 
         pairwise_g, coset_functions, mask = input
 
-        coset_functions_at_query = coset_functions
+        if query_indices is not None:
+            raise NotImplementedError()
+        else:
+            coset_functions_at_query = coset_functions
+            mask_at_query = mask
+            pairwise_g_at_query = pairwise_g
 
-        # TODO: temporarily selecting all points to be in neighbourhood
-        nbhd_idx = (
-            torch.arange(coset_functions.shape[1], device=coset_functions.device)
-            .long()[None, None, :]
-            .expand(pairwise_g.shape[:-1])
-        )
+        if self.mc_samples > 0:
+            dists = self.group.distance(pairwise_g_at_query)
+            dists = torch.where(
+                mask[:, None, :].expand(*dists.shape),
+                dists,
+                1e8 * torch.ones_like(dists),
+            )
+            k = (
+                coset_functions.shape[1]
+                if not self.mc_samples
+                else min(self.mc_samples, coset_functions.shape[1])
+            )
+            k_ball = (
+                coset_functions.shape[1]
+                if not self.mc_samples
+                else min(int(self.mc_samples / self.fill), coset_functions.shape[1])
+            )
+            _, points_in_ball_indices = dists.topk(
+                k=k_ball, dim=-1, largest=False, sorted=False
+            )
+            ball_indices = torch.randperm(k_ball)[:k]
+
+            nbhd_idx = points_in_ball_indices[:, :, ball_indices]
+
+        else:
+            nbhd_idx = (
+                torch.arange(coset_functions.shape[1], device=coset_functions.device)
+                .long()[None, None, :]
+                .expand(pairwise_g.shape[:-1])
+            )
 
         # Get batch index array
         BS = (
@@ -248,6 +282,8 @@ class EquivariantTransformerBlock(nn.Module):
         kernel_dim=16,
         kernel_act="swish",
         batch_norm=False,
+        mc_samples=0,
+        fill=1.0,
     ):
         super().__init__()
         self.ema = EquivairantMultiheadAttention(
@@ -259,6 +295,8 @@ class EquivariantTransformerBlock(nn.Module):
             kernel_dim=kernel_dim,
             act=kernel_act,
             bn=batch_norm,
+            mc_samples=mc_samples,
+            fill=fill,
         )
         self.mlp = nn.Sequential(nn.Linear(dim, dim), Swish(), nn.Linear(dim, dim))
 
@@ -277,9 +315,9 @@ class EquivariantTransformerBlock(nn.Module):
                 + self.ema((pairwise_g, self.ln_ema(coset_functions), mask))[1]
             )
         else:
-            coset_functions = coset_functions + self.ema(
-                (pairwise_g, coset_functions, mask)
-            )[1]
+            coset_functions = (
+                coset_functions + self.ema((pairwise_g, coset_functions, mask))[1]
+            )
 
         # optional layer norm
         if getattr(self, "ln_mlp", None) is not None:
@@ -329,6 +367,8 @@ class EquivariantTransformer(nn.Module):
         kernel_dim=16,
         kernel_act="swish",
         batch_norm=False,
+        mc_samples=0,
+        fill=1.0,
     ):
         super().__init__()
 
@@ -346,6 +386,8 @@ class EquivariantTransformer(nn.Module):
             kernel_dim=kernel_dim,
             kernel_act=kernel_act,
             batch_norm=batch_norm,
+            mc_samples=mc_samples,
+            fill=fill,
         )
 
         self.net = nn.Sequential(
