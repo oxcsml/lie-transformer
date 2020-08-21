@@ -36,7 +36,7 @@ class MolecueSetTransformer(SetTransformer):
 
     # Featurization from lieconv
     def featurize(self, mb):
-        charges = mb["charges"] / self.charge_scale
+        charges = mb["charges"].float() / self.charge_scale.float()
         c_vec = torch.stack([torch.ones_like(charges), charges, charges ** 2], dim=-1)
         one_hot_charges = (
             (mb["one_hot"][:, :, :, None] * c_vec[:, :, None, :])
