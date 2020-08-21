@@ -1,9 +1,3 @@
-# %%
-import sys
-
-sys.path.append('forge')
-sys.path.append('.')
-
 from os import path as osp
 import time
 import torch
@@ -182,41 +176,45 @@ def main():
 
             # Logging
             if batch_idx % config.evaluate_every == 0:
-                reports = None
-                for data in test_loader:
-                    data, presence, target = [d.to(device) for d in data]
-                    outputs = model([data, presence], target)
-                    outputs.reports.acc = outputs.acc
+                with torch.no_grad():
+                    reports = None
+                    for data in test_loader:
+                        data, presence, target = [d.to(device) for d in data]
+                        outputs = model([data, presence], target)
+                        outputs.reports.acc = outputs.acc
 
-                    if reports is None:
-                        reports = {k: v.detach().clone().cpu() for k, v in outputs.reports.items()}
+                        if reports is None:
+                            reports = {
+                                k: v.detach().clone().cpu()
+                                for k, v in outputs.reports.items()
+                            }
+                        else:
+                            for k, v in outputs.reports.items():
+                                reports[k] += v.detach().clone().cpu()
+
+                    for k, v in reports.items():
+                        reports[k] = v / len(test_loader)
+
+                    reports = parse_reports(reports)
+                    reports["time"] = time.time() - start_t
+                    if report_all == {}:
+                        report_all = deepcopy(reports)
+
+                        for d in reports.keys():
+                            report_all[d] = [report_all[d]]
                     else:
-                        for k, v in outputs.reports.items():
-                            reports[k] += v.detach().clone().cpu()
+                        for d in reports.keys():
+                            report_all[d].append(reports[d])
 
-                for k, v in reports.items():
-                    reports[k] = v / len(test_loader)
-
-                reports = parse_reports(reports)
-                reports['time'] = time.time() - start_t
-                if report_all == {}:
-                    report_all = deepcopy(reports)
-
-                    for d in reports.keys():
-                        report_all[d] = [report_all[d]]
-                else:
-                    for d in reports.keys():
-                        report_all[d].append(reports[d])
-
-                log_tensorboard(summary_writer, train_iter, reports)
-                print_reports(
-                    reports,
-                    start_t,
-                    epoch,
-                    batch_idx,
-                    len(train_loader.dataset) // config.batch_size,
-                    prefix="test",
-                )
+                    log_tensorboard(summary_writer, train_iter, reports, "test/")
+                    print_reports(
+                        reports,
+                        start_t,
+                        epoch,
+                        batch_idx,
+                        len(train_loader.dataset) // config.batch_size,
+                        prefix="test",
+                    )
 
             train_iter += 1
 
@@ -225,9 +223,9 @@ def main():
                     checkpoint_name, train_iter, model, model_opt, loss=outputs.loss
                 )
 
-        dd.io.save(logdir + '/train_results.h5', train_reports)
+        dd.io.save(logdir + "/train_results.h5", train_reports)
         dd.io.save(logdir + "/results_dict.h5", report_all)
-        
+
         save_checkpoint(
             checkpoint_name, train_iter, model, model_opt, loss=outputs.loss
         )
