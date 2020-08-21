@@ -10,14 +10,14 @@ from forge import flags
 
 flags.DEFINE_boolean(
     "data_augmentation",
-    False,
+    True,
     "Apply data augmentation to the data before passing to the model",
 )
 flags.DEFINE_integer("dim_hidden", 512, "Dimension of features to use in each layer")
 flags.DEFINE_string(
     "activation_function", "swish", "Activation function to use in the network"
 )
-flags.DEFINE_boolean("layer_norm", False, "Use layer norm in the layers")
+flags.DEFINE_boolean("layer_norm", True, "Use layer norm in the layers")
 flags.DEFINE_boolean(
     "mean_pooling",
     True,
@@ -42,7 +42,7 @@ class MoleculeEquivariantTransformer(EquivariantTransformer):
         self.random_rotate = SE3aug()
 
     def featurize(self, mb):
-        charges = mb["charges"].float() / self.charge_scale
+        charges = mb["charges"].float() / self.charge_scale.float()
         c_vec = torch.stack(
             [torch.ones_like(charges), charges, charges ** 2], dim=-1
         )  #
@@ -93,6 +93,9 @@ def load(config, **unused_kwargs):
         kernel_act=config.activation_function,
         batch_norm=config.batch_norm,
     )
+
+    # predictor.net[-1][-1].weight.data = predictor.net[-1][-1].weight * (0.205 / 0.005)
+    # predictor.net[-1][-1].bias.data = predictor.net[-1][-1].bias - (0.196 + 0.40)
 
     molecule_predictor = MoleculePredictor(predictor, config.task, config.ds_stats)
 
