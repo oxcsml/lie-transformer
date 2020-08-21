@@ -14,7 +14,7 @@ flags.DEFINE_bool(
 )
 flags.DEFINE_integer("channel_width", 1536, "Number of channels to use in each layer")
 flags.DEFINE_integer(
-    "nbhd_size", 100, "The number of samples to use for Monte Carlo estimation"
+    "nbhd_size", 25, "The number of samples to use for Monte Carlo estimation"
 )
 flags.DEFINE_string(
     "activation_function", "swish", "Activation function to use in the network"
@@ -34,7 +34,7 @@ flags.DEFINE_float(
     "specifies the fraction of the input which is included in local neighborhood. (can be array to specify a different value for each layer",
 )
 flags.DEFINE_integer(
-    "lift_samples", 1, "Number of coset lift samples to use for non-trivial stabilisers"
+    "lift_samples", 4, "Number of coset lift samples to use for non-trivial stabilisers"
 )
 
 
@@ -69,4 +69,4 @@ def load(config, **unused_kwargs):
 
     molecule_predictor = MoleculePredictor(predictor, config.task, config.ds_stats)
 
-    return molecule_predictor, f"MolecLieResNet_{config.group}"
+    return molecule_predictor, f"MoleculeLieResNet_{config.group}"
