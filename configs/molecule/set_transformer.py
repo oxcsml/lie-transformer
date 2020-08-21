@@ -23,6 +23,7 @@ flags.DEFINE_integer(
     "Number of inducing points; does not use inducing points if 0.",
 )
 flags.DEFINE_boolean("layer_norm", False, "Uses layer-norm if True.")
+flags.DEFINE_integer("hidden_dim", 128, "Hidden dimension between layers")
 
 
 class MolecueSetTransformer(SetTransformer):
@@ -67,6 +68,7 @@ def load(config, **unused_kwargs):
         num_species=config.num_species,
         charge_scale=config.charge_scale,
         aug=config.data_augmentation,
+        dim_hidden=config.hidden_dim,
         n_enc_layers=config.n_enc_layers,
         n_dec_layers=config.n_dec_layers,
         num_heads=config.n_heads,
