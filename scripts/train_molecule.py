@@ -1,3 +1,4 @@
+import sys
 from os import path as osp
 import time
 from math import sqrt
@@ -81,6 +82,9 @@ flags.DEFINE_float("beta2", 0.9, "Adam Beta 2 parameter")
 flags.DEFINE_string(
     "lr_schedule", "none", "What learning rate schedule to use. Options: cosine, none",
 )
+flags.DEFINE_boolean(
+    "parameter_count", False, "If True, print model parameter count and exit"
+)
 
 
 #####################################################################################################################
@@ -103,6 +107,14 @@ def main():
     # Load model
     model, model_name = fet.load(config.model_config, config)
     model.to(device)
+
+    if config.parameter_count:
+        print("============================================================")
+        print(
+            f"{model_name} parameters: {sum(p.numel() for p in model.parameters()):.5e}"
+        )
+        # fet.print_flags()
+        sys.exit(0)
 
     config.charge_scale = float(config.charge_scale.numpy())
     config.ds_stats = [float(stat.numpy()) for stat in config.ds_stats]
