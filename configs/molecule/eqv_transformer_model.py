@@ -31,6 +31,14 @@ flags.DEFINE_string("group", "SE3", "Group to be invariant to")
 flags.DEFINE_integer(
     "lift_samples", 1, "Number of coset lift samples to use for non-trivial stabilisers"
 )
+flags.DEFINE_integer(
+    "mc_samples",
+    0,
+    "Number of samples to use for estimating attention. 0 sets to use all points",
+)
+flags.DEFINE_float(
+    "fill", 1.0, "Select mc_samples from K nearest mc_samples/fill points"
+)
 flags.DEFINE_integer("model_seed", 0, "Model rng seed")
 
 
@@ -92,6 +100,8 @@ def load(config, **unused_kwargs):
         kernel_dim=config.kernel_dim,
         kernel_act=config.activation_function,
         batch_norm=config.batch_norm,
+        fill=config.fill,
+        mc_samples=config.mc_samples,
     )
 
     # predictor.net[-1][-1].weight.data = predictor.net[-1][-1].weight * (0.205 / 0.005)
