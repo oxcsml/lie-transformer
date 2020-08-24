@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from einops import rearrange, reduce
+from einops.einops import rearrange, reduce
 
 from lie_conv.lieGroups import SE3
 from lie_conv.lieConv import Swish
@@ -21,6 +21,14 @@ class SumKernel(nn.Module):
         self.feature_kernel = feature_kernel
 
     def forward(self, pairwise_locations, mask, query_features, key_features, nbhd_idx):
+        # Expand across head dimension TODO: possibly wasteful and could avoid with a special linear layer
+        # (bs, n * ns, nbhd_size, g_dim) -> (bs, n * ns, nbhd_size, h, g_dim)
+        pairwise_locations = pairwise_locations.unsqueeze(-2).repeat(
+            1, 1, 1, self.n_heads, 1
+        )
+        # Exapand the mask along the head dim
+        mask = mask.unsqueeze(-1)
+
         return self.location_kernel((None, pairwise_locations, mask))[
             1
         ].squeeze() + self.feature_kernel(query_features, key_features, nbhd_idx)
@@ -71,7 +79,7 @@ class DotProductKernel(nn.Module):
         # (bs, n, c_in) -> (bs, n, embed_dim) -> (bs * n_heads, n, h_dim)
         Q = rearrange(self.fc_q(q), "b n (h d) -> (b h) n d", h=self.n_heads)
         # (bs * n_heads, n, h_dim), (bs * n_heads, m, h_dim) -> (bs * n_heads, n, m)
-        A_ = Q.bmm(K.transpose(1, 2)) / math.sqrt(self.embed_dim)
+        A_ = Q.bmm(K.transpose(1, 2)) / math.sqrt(self.head_dim)
 
         # (bs * n_heads, n, nbhd_size) -> (bs, n, nbhd_size, n_heads)
         A_ = rearrange(A_, "(b h) n m -> b n m h", h=self.n_heads)
@@ -95,6 +103,67 @@ class DotProductKernel(nn.Module):
         return A_
 
 
+class RelativePositionKernel(nn.Module):
+    def __init__(
+        self, embed_dim, feature_dim, position_dim, n_heads, bias=False, lamda=1.0
+    ):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.n_heads = n_heads
+        self.feature_dim = feature_dim
+        self.position_dim = position_dim
+        self.lamda = lamda
+
+        self.head_dim = embed_dim // n_heads
+        assert (
+            self.head_dim * self.n_heads == self.embed_dim
+        ), "embed_dim must be divisible by n_heads"
+
+        self.W_q = nn.Linear(feature_dim, embed_dim, bias=bias)
+        self.W_k = nn.Linear(feature_dim, embed_dim, bias=bias)
+        self.W_l = nn.Linear(position_dim, embed_dim, bias=bias)
+
+        self.u = nn.Parameter(torch.zeros([self.n_heads, 1, self.head_dim]))
+        self.v = nn.Parameter(torch.zeros([self.n_heads, 1, self.head_dim]))
+
+    def forward(self, pairwise_locations, mask, query_features, key_features, nbhd_idx):
+
+        # (bs, m, c_in) -> (bs, m, embed_dim) -> (bs * n_heads, m, h_dim)
+        K = rearrange(self.W_k(key_features), "b n (h d) -> (b h) n d", h=self.n_heads)
+        # (bs, n, c_in) -> (bs, n, embed_dim) -> (bs * n_heads, n, h_dim)
+        Q = rearrange(
+            self.W_q(query_features), "b n (h d) -> (b h) n d", h=self.n_heads
+        )
+        e = rearrange(
+            self.W_l(pairwise_locations), "b n m (h d) -> (b h) n m d", h=self.n_heads
+        )
+        u = self.u.repeat([mask.shape[0], 1, 1])
+        v = self.v.repeat([mask.shape[0], 1, 1])
+        nbhd_idx = nbhd_idx.repeat_interleave(self.n_heads, dim=0)
+
+        # Batch indicies
+        B = (
+            torch.arange(nbhd_idx.shape[0], device=nbhd_idx.device)
+            .long()[:, None, None]
+            .expand(*nbhd_idx.shape)
+        )
+
+        # Get NNS indexes
+        NNS = (
+            torch.arange(nbhd_idx.shape[1], device=nbhd_idx.device)
+            .long()[None, :, None]
+            .expand(*nbhd_idx.shape)
+        )
+
+        A_ = (
+            Q.bmm(K.transpose(1, 2))[B, NNS, nbhd_idx]
+            + self.lamda * (e @ (Q + v).unsqueeze(-1)).squeeze()
+            + K @ u.transpose(1, 2)
+        ) / math.sqrt(self.head_dim)
+
+        return rearrange(A_, "(b h) n m -> b n m h", h=self.n_heads)
+
+
 class EquivairantMultiheadAttention(nn.Module):
     def __init__(
         self,
@@ -103,6 +172,7 @@ class EquivairantMultiheadAttention(nn.Module):
         n_heads,
         group,
         layer_norm=False,
+        kernel_type="mlp",
         kernel_dim=16,
         act="swish",
         bn=False,
@@ -120,17 +190,29 @@ class EquivairantMultiheadAttention(nn.Module):
         self.mc_samples = mc_samples
         self.fill = fill
 
-        self.kernel = SumKernel(
-            MultiheadWeightNet(
+        if kernel_type == "mlp":
+            self.kernel = SumKernel(
+                MultiheadWeightNet(
+                    group.lie_dim + 2 * group.q_dim,
+                    1,
+                    n_heads,
+                    hid_dim=kernel_dim,
+                    act=act,
+                    bn=bn,
+                ),
+                DotProductKernel(c_in, c_in, c_in, n_heads=n_heads),
+            )
+        elif kernel_type == "relative_position":
+            self.kernel = RelativePositionKernel(
+                c_in,
+                c_in,
                 group.lie_dim + 2 * group.q_dim,
-                1,
-                n_heads,
-                hid_dim=kernel_dim,
-                act=act,
-                bn=bn,
-            ),
-            DotProductKernel(c_in, c_in, c_in, n_heads=n_heads),
-        )
+                n_heads=n_heads,
+                bias=True,
+                lamda=1.0,
+            )
+        else:
+            raise ValueError(f"{kernel_type} is not a valid kernel type")
 
         self.input_linear = nn.Linear(c_in, c_out)
         self.output_linear = nn.Linear(c_out, c_out)
@@ -222,12 +304,6 @@ class EquivairantMultiheadAttention(nn.Module):
             nbhd_idx,
         ) = self.extract_neighbourhoods(input)
 
-        # Expand across head dimension TODO: possibly wasteful and could avoid with a special linear layer
-        # (bs, n * ns, nbhd_size, g_dim) -> (bs, n * ns, nbhd_size, h, g_dim)
-        nbhd_pairwise_g = nbhd_pairwise_g.unsqueeze(-2).repeat(1, 1, 1, self.n_heads, 1)
-        # Exapand the mask along the head dim
-        nbhd_mask = nbhd_mask.unsqueeze(-1)
-
         # (bs, n * ns, n * ns, g_dim), (bs, n * ns, c_in), (bs, n * ns, nbhd_size, c_in) -> (bs, n * ns, nbhd_size, h)
         presoftmax_weights = self.kernel(
             nbhd_pairwise_g, nbhd_mask, coset_functions, coset_functions, nbhd_idx
@@ -236,7 +312,7 @@ class EquivairantMultiheadAttention(nn.Module):
         # Make masked areas very small attention weights
         presoftmax_weights = torch.where(
             # (bs, n * ns, nbhd_size) -> (bs, n * ns, nbhd_size, 1). Constant along head dim
-            nbhd_mask,
+            nbhd_mask.unsqueeze(-1),
             presoftmax_weights,
             torch.tensor(
                 -1e38, dtype=presoftmax_weights.dtype, device=presoftmax_weights.device
@@ -279,6 +355,7 @@ class EquivariantTransformerBlock(nn.Module):
         n_heads,
         group,
         layer_norm=False,
+        kernel_type="mlp",
         kernel_dim=16,
         kernel_act="swish",
         batch_norm=False,
@@ -292,6 +369,7 @@ class EquivariantTransformerBlock(nn.Module):
             n_heads,
             group,
             layer_norm=layer_norm,
+            kernel_type=kernel_type,
             kernel_dim=kernel_dim,
             act=kernel_act,
             bn=batch_norm,
@@ -364,6 +442,7 @@ class EquivariantTransformer(nn.Module):
         global_pool_mean=True,
         group=SE3(0.2),
         liftsamples=1,
+        kernel_type="mlp",
         kernel_dim=16,
         kernel_act="swish",
         batch_norm=False,
@@ -383,6 +462,7 @@ class EquivariantTransformer(nn.Module):
             n_head,
             group,
             layer_norm=layer_norm,
+            kernel_type=kernel_type,
             kernel_dim=kernel_dim,
             kernel_act=kernel_act,
             batch_norm=batch_norm,
@@ -402,7 +482,7 @@ class EquivariantTransformer(nn.Module):
                 nn.Linear(dim_hidden[-1], dim_hidden[-1]),
                 Swish(),
                 nn.Linear(dim_hidden[-1], dim_output),
-            )
+            ),
         )
 
         self.group = group

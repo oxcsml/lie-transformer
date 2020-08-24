@@ -24,6 +24,11 @@ flags.DEFINE_boolean(
     "Use mean pooling insteave of sum pooling in the invariant layer",
 )
 flags.DEFINE_integer("num_heads", 8, "Number of attention heads in each layer")
+flags.DEFINE_string(
+    "kernel_type",
+    "mlp",
+    "Selects the type of attention kernel to use. mlp of relative_position are valid",
+)
 flags.DEFINE_integer("kernel_dim", 16, "Hidden layer size to use in kernel MLPs")
 flags.DEFINE_boolean("batch_norm", False, "Use batch norm in the kernel MLPs")
 flags.DEFINE_integer("num_layers", 6, "Number of ResNet layers to use")
@@ -97,6 +102,7 @@ def load(config, **unused_kwargs):
         global_pool=True,
         global_pool_mean=config.mean_pooling,
         liftsamples=config.lift_samples,
+        kernel_type=config.kernel_type,
         kernel_dim=config.kernel_dim,
         kernel_act=config.activation_function,
         batch_norm=config.batch_norm,
