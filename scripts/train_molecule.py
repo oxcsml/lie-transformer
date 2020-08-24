@@ -65,8 +65,8 @@ flags.DEFINE_integer(
 )
 flags.DEFINE_integer(
     "save_check_points",
-    100000,
-    "frequency with which to save checkpoints, in number of minibatches.",
+    10,
+    "frequency with which to save checkpoints, in number of epochs.",
 )
 flags.DEFINE_boolean("log_train_values", True, "Logs train values if True.")
 flags.DEFINE_float(
@@ -256,11 +256,6 @@ def main():
             # Step the LR schedule
             lr_schedule.step(train_iter / iters_per_epoch)
 
-            if train_iter % config.save_check_points == 0:
-                save_checkpoint(
-                    checkpoint_name, epoch, model, model_opt, lr_schedule, outputs.loss,
-                )
-
         # Test model at end of batch
         with torch.no_grad():
             test_mae = 0.0
@@ -285,7 +280,11 @@ def main():
             prefix="test",
         )
 
-        reports = {"lr": lr_schedule.get_lr()[0], "time": time.perf_counter() - start_t}
+        reports = {
+            "lr": lr_schedule.get_lr()[0],
+            "time": time.perf_counter() - start_t,
+            "epoch": epoch,
+        }
 
         log_tensorboard(summary_writer, train_iter, reports, "stats")
         report_all = log_reports(report_all, train_iter, reports, "stats")
@@ -294,9 +293,10 @@ def main():
         dd.io.save(logdir + "/results_dict.h5", report_all)
 
         # Save a checkpoint
-        save_checkpoint(
-            checkpoint_name, epoch, model, model_opt, lr_schedule, outputs.loss
-        )
+        if epoch % config.save_check_points == 0:
+            save_checkpoint(
+                checkpoint_name, epoch, model, model_opt, lr_schedule, outputs.loss,
+            )
 
 
 if __name__ == "__main__":
