@@ -20,10 +20,6 @@ from eqv_transformer.train_tools import (
     ExponentialMovingAverage,
 )
 
-if torch.cuda.is_available():
-    device = "cuda"
-else:
-    device = "cpu"
 
 # %%
 
@@ -60,8 +56,8 @@ flags.DEFINE_integer(
 )
 flags.DEFINE_integer(
     "save_check_points",
-    100000,
-    "frequency with which to save checkpoints, in number of minibatches.",
+    5,
+    "frequency with which to save checkpoints, in number of epoches.",
 )
 flags.DEFINE_boolean("log_train_values", True, "Logs train values if True.")
 flags.DEFINE_float(
@@ -75,6 +71,8 @@ flags.DEFINE_float("learning_rate", 1e-5, "SGD learning rate.")
 flags.DEFINE_float("beta1", 0.5, "Adam Beta 1 parameter")
 flags.DEFINE_float("beta2", 0.9, "Adam Beta 2 parameter")
 
+# GPU device
+flags.DEFINE_integer("device", 0, "GPU to use.")
 
 #####################################################################################################################
 
@@ -83,6 +81,13 @@ flags.DEFINE_float("beta2", 0.9, "Adam Beta 2 parameter")
 def main():
     # Parse flags
     config = forge.config()
+
+    # Set device
+    if torch.cuda.is_available():
+        device = f"cuda:{config.device}"
+        torch.cuda.set_device(device)
+    else:
+        device = "cpu"
 
     # Load data
     train_loader, test_loader, data_name = fet.load(config.data_config, config=config)
@@ -99,6 +104,18 @@ def main():
         + str(config.batch_size)
         + "_lr"
         + str(config.learning_rate)
+        + "_reps"
+        + str(config.patterns_reps)
+        + "_nheads" 
+        + str(config.num_heads)
+        + "_nlayers" 
+        + str(config.num_layers)
+        + "_hdim" 
+        + str(config.dim_hidden)
+        + "_kdim" 
+        + str(config.kernel_dim)
+        + "_nsamples" 
+        + str(config.lift_samples)
     )
 
     results_folder_name = osp.join(data_name, model_name, run_name,)
@@ -145,8 +162,6 @@ def main():
 
     # Training
     start_t = time.time()
-    if config.log_train_values:
-        train_emas = ExponentialMovingAverage(alpha=config.ema_alpha, debias=True)
 
     for epoch in range(start_epoch, config.train_epochs + 1):
         model.train()
@@ -176,44 +191,51 @@ def main():
 
             # Logging
             if batch_idx % config.evaluate_every == 0:
-                with torch.no_grad():  # prevents memory accumulation
+                with torch.no_grad():
                     reports = None
                     for data in test_loader:
                         data, presence, target = [d.to(device) for d in data]
-                        if (
-                            config.data_config
-                            == "configs/constellation/constellation.py"
-                        ):
+                        if config.data_config == "configs/constellation/constellation.py":
                             if config.global_rotation != 0.0:
                                 data = rotate(data, config.global_rotation)
                         outputs = model([data, presence], target)
-                        outputs.reports.acc = outputs.acc
-
+                        
                         if reports is None:
-                            reports = {
-                                k: v.detach().clone().cpu()
-                                for k, v in outputs.reports.items()
-                            }
+                            reports = {k: v.detach().clone().cpu() for k, v in outputs.reports.items()}
                         else:
-                            for d in reports.keys():
-                                report_all[d].append(reports[d])
+                            for k, v in outputs.reports.items():
+                                reports[k] += v.detach().clone().cpu()
 
-                        log_tensorboard(summary_writer, train_iter, reports, "test/")
-                        print_reports(
-                            reports,
-                            start_t,
-                            epoch,
-                            batch_idx,
-                            len(train_loader.dataset) // config.batch_size,
-                            prefix="test",
-                        )
+                    for k, v in reports.items():
+                        reports[k] = v / len(test_loader) # SZ: note this is slightly incorrect since mini-batch sizes can vary (if batch_size doesn't divide train_size), but approximately correct.
+
+                    reports = parse_reports(reports)
+                    reports['time'] = time.time() - start_t
+                    if report_all == {}:
+                        report_all = deepcopy(reports)
+
+                        for d in reports.keys():
+                            report_all[d] = [report_all[d]]
+                    else:
+                        for d in reports.keys():
+                            report_all[d].append(reports[d])
+
+                    log_tensorboard(summary_writer, train_iter, reports, "test/")
+                    print_reports(
+                        reports,
+                        start_t,
+                        epoch,
+                        batch_idx,
+                        len(train_loader.dataset) // config.batch_size,
+                        prefix="test",
+                    )
 
             train_iter += 1
 
-            if train_iter % config.save_check_points == 0:
-                save_checkpoint(
-                    checkpoint_name, train_iter, model, model_opt, loss=outputs.loss
-                )
+        if epoch % config.save_check_points == 0:
+            save_checkpoint(
+                checkpoint_name, train_iter, model, model_opt, loss=outputs.loss
+            )
 
         dd.io.save(logdir + "/train_results.h5", train_reports)
         dd.io.save(logdir + "/results_dict.h5", report_all)
