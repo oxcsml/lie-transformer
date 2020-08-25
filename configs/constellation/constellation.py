@@ -137,6 +137,13 @@ def create_constellations(
         transformations.append(transformation)
         all_corners.append(corners)
 
+    # if all patterns not present, make a random one present
+    if np.count_nonzero(all_pattern_presence) == 0:
+        idx = rng.randint(len(all_pattern_presence))
+        
+        all_pattern_presence[idx] = np.ones_like(all_pattern_presence[idx])
+        all_corner_presence[idx] = np.ones_like(all_corner_presence[idx])
+
     capsules = np.concatenate(all_corners, axis=1)[Ellipsis, :2]
     all_corner_presence = np.concatenate(all_corner_presence, axis=1)
     all_pattern_presence = np.concatenate(all_pattern_presence, axis=1)
