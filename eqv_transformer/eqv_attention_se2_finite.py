@@ -241,7 +241,7 @@ class EqvSelfAttention(nn.Module):
 
         # bias the logits to not take absent entries into account
         if self.similarity_fn == 'softmax':
-            inf = torch.tensor(1e38, dtype=torch.float32,
+            inf = torch.tensor(1e38, dtype=queries.dtype,
                                device=queries.device)
             if presence_q is not None:
                 presence_q = presence_q.repeat(self.num_heads, 1).unsqueeze(-1)
@@ -293,6 +293,7 @@ class GroupPool(nn.Module):
         if self.pool_fn == 'average':
             X = X * presence.unsqueeze(-1)
             X = X.mean(1)  # assumes the group elements are along dim 1
+            # TODO: SZ: should change divisors here to depend on presence
         elif self.pool_fn == 'max':
             mask_scalar = torch.min(X) - 1
             X = X * presence.unsqueeze(-1) + mask_scalar * (1-presence.unsqueeze(-1))
