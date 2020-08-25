@@ -10,26 +10,39 @@ from forge import flags
 
 flags.DEFINE_boolean(
     "data_augmentation",
-    False,
+    True,
     "Apply data augmentation to the data before passing to the model",
 )
 flags.DEFINE_integer("dim_hidden", 512, "Dimension of features to use in each layer")
 flags.DEFINE_string(
     "activation_function", "swish", "Activation function to use in the network"
 )
-flags.DEFINE_boolean("layer_norm", False, "Use layer norm in the layers")
+flags.DEFINE_boolean("layer_norm", True, "Use layer norm in the layers")
 flags.DEFINE_boolean(
     "mean_pooling",
     True,
     "Use mean pooling insteave of sum pooling in the invariant layer",
 )
 flags.DEFINE_integer("num_heads", 8, "Number of attention heads in each layer")
+flags.DEFINE_string(
+    "kernel_type",
+    "mlp",
+    "Selects the type of attention kernel to use. mlp of relative_position are valid",
+)
 flags.DEFINE_integer("kernel_dim", 16, "Hidden layer size to use in kernel MLPs")
 flags.DEFINE_boolean("batch_norm", False, "Use batch norm in the kernel MLPs")
 flags.DEFINE_integer("num_layers", 6, "Number of ResNet layers to use")
 flags.DEFINE_string("group", "SE3", "Group to be invariant to")
 flags.DEFINE_integer(
     "lift_samples", 1, "Number of coset lift samples to use for non-trivial stabilisers"
+)
+flags.DEFINE_integer(
+    "mc_samples",
+    0,
+    "Number of samples to use for estimating attention. 0 sets to use all points",
+)
+flags.DEFINE_float(
+    "fill", 1.0, "Select mc_samples from K nearest mc_samples/fill points"
 )
 flags.DEFINE_integer("model_seed", 0, "Model rng seed")
 
@@ -42,7 +55,7 @@ class MoleculeEquivariantTransformer(EquivariantTransformer):
         self.random_rotate = SE3aug()
 
     def featurize(self, mb):
-        charges = mb["charges"].float() / self.charge_scale
+        charges = mb["charges"].float() / self.charge_scale.float()
         c_vec = torch.stack(
             [torch.ones_like(charges), charges, charges ** 2], dim=-1
         )  #
@@ -89,10 +102,16 @@ def load(config, **unused_kwargs):
         global_pool=True,
         global_pool_mean=config.mean_pooling,
         liftsamples=config.lift_samples,
+        kernel_type=config.kernel_type,
         kernel_dim=config.kernel_dim,
         kernel_act=config.activation_function,
         batch_norm=config.batch_norm,
+        fill=config.fill,
+        mc_samples=config.mc_samples,
     )
+
+    # predictor.net[-1][-1].weight.data = predictor.net[-1][-1].weight * (0.205 / 0.005)
+    # predictor.net[-1][-1].bias.data = predictor.net[-1][-1].bias - (0.196 + 0.40)
 
     molecule_predictor = MoleculePredictor(predictor, config.task, config.ds_stats)
 

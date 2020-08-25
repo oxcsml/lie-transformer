@@ -3,6 +3,7 @@ import torch
 from eqv_transformer.classfier import Classifier
 from eqv_transformer.eqv_attention import EquivariantTransformer
 from lie_conv.lieGroups import SE3, SE2, SO3, T, Trivial
+
 # from lie_conv.datasets import SE3aug
 
 from forge import flags
@@ -34,6 +35,11 @@ flags.DEFINE_integer(
 flags.DEFINE_integer("model_seed", 0, "Model rng seed")
 
 flags.DEFINE_string("content_type", "pairwise_distances", "How to initialize y")
+flags.DEFINE_integer(
+    "distance_moments",
+    10,
+    "Number of distance moments to use if using distance moment features",
+)
 
 
 def constant_features(X, presence):
@@ -56,54 +62,31 @@ def pairwise_distance_moment_features(X, presence, n_moments=5):
     X_distances = torch.where(
         presence.unsqueeze(-2), X_distances, torch.zeros_like(X_distances)
     )
+    N = presence.sum(dim=-1, keepdim=True).unsqueeze(-1).clamp(min=1.0)
     X_distance_moments = torch.cat(
-        [X_distances.pow(i).sum(dim=-1, keepdim=True) for i in range(1, n_moments + 1)],
+        [
+            (X_distances.pow(i).sum(dim=-1, keepdim=True) / N).pow(1.0 / i)
+            for i in range(1, n_moments + 1)
+        ],
         dim=-1,
     )
-    N = presence.sum(dim=-1, keepdim=True).unsqueeze(-1)
-    N = torch.where(N == 0, torch.ones_like(N), N)
-    X_distance_moments = X_distance_moments / N
     return X_distance_moments
 
 
 class ConstellationEquivariantTransformer(EquivariantTransformer):
-    def __init__(
-        self, n_patterns, patterns_reps, content_type="pairwise_distances", **kwargs
-    ):
-        if content_type == "centroidal":
-            dim_input = 2
-        elif content_type == "constant":
-            dim_input = 1
-        elif content_type == "pairwise_distances":
-            dim_input = patterns_reps * 17 - 1
-        elif content_type == "distance_moments":
-            dim_input = 10
-        else:
-            raise NotImplementedError(f"{content_type} featurization not implemented")
-
+    def __init__(self, n_patterns, patterns_reps, feature_function, **kwargs):
         super().__init__(
-            dim_input=dim_input, dim_output=n_patterns * (patterns_reps + 1), **kwargs,
+            dim_output=n_patterns * (patterns_reps + 1), **kwargs,
         )
 
         self.n_patterns = n_patterns
         self.patterns_reps = patterns_reps
-
-        if content_type == "centroidal":
-            raise NotImplementedError()
-            # self.featurize
-        elif content_type == "constant":
-            self.featurize = constant_features
-        elif content_type == "pairwise_distances":
-            self.featurize = pairwise_distance_features  # i.e. use the arg dim_input
-        elif content_type == "distance_moments":
-            self.featurize = lambda X, presence: pairwise_distance_moment_features(
-                X, presence, n_moments=dim_input
-            )
+        self.feature_function = feature_function
 
     def forward(self, X, presence=None):
         presence = presence.to(bool)
         with torch.no_grad():
-            Y = self.featurize(X, presence)
+            Y = self.feature_function(X, presence)
 
         output = super().forward((X, Y, presence.to(bool)))
         return output.reshape(
@@ -126,15 +109,34 @@ def load(config, **unused_kwargs):
     else:
         raise ValueError(f"{config.group} is and invalid group")
 
-    input_dim = config.patterns_reps * 17 - 1
+    if config.content_type == "centroidal":
+        dim_input = 2
+        feature_function = constant_features
+    elif config.content_type == "constant":
+        dim_input = 1
+        feature_function = lambda x, presence: torch.ones(x.shape[:-1]).unsqueeze(-1)
+    elif config.content_type == "pairwise_distances":
+        dim_input = config.patterns_reps * 17 - 1
+        feature_function = pairwise_distance_features  # i.e. use the arg dim_input
+    elif config.content_type == "distance_moments":
+        dim_input = config.distance_moments
+        feature_function = lambda X, presence: pairwise_distance_moment_features(
+            X, presence, n_moments=config.distance_moments
+        )
+    else:
+        raise NotImplementedError(
+            f"{config.content_type} featurization not implemented"
+        )
+
     output_dim = config.patterns_reps + 1
 
     torch.manual_seed(config.model_seed)
     predictor = ConstellationEquivariantTransformer(
         n_patterns=4,
         patterns_reps=config.patterns_reps,
-        content_type=config.content_type,
+        feature_function=feature_function,
         group=group,
+        dim_input=dim_input,
         dim_hidden=config.dim_hidden,
         num_layers=config.num_layers,
         num_heads=config.num_heads,
