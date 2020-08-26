@@ -14,11 +14,12 @@ from eqv_transformer.multihead_neural import MultiheadWeightNet
 
 
 class SumKernel(nn.Module):
-    def __init__(self, location_kernel, feature_kernel):
+    def __init__(self, location_kernel, feature_kernel, n_heads):
         super().__init__()
 
         self.location_kernel = location_kernel
         self.feature_kernel = feature_kernel
+        self.n_heads = n_heads
 
     def forward(self, pairwise_locations, mask, query_features, key_features, nbhd_idx):
         # Expand across head dimension TODO: possibly wasteful and could avoid with a special linear layer
@@ -31,7 +32,7 @@ class SumKernel(nn.Module):
 
         return self.location_kernel((None, pairwise_locations, mask))[
             1
-        ].squeeze() + self.feature_kernel(query_features, key_features, nbhd_idx)
+        ].squeeze() + self.feature_kernel(key_features, query_features, nbhd_idx)
         # return self.feature_kernel(query_features, key_features, nbhd_idx)
 
 
@@ -201,6 +202,7 @@ class EquivairantMultiheadAttention(nn.Module):
                     bn=bn,
                 ),
                 DotProductKernel(c_in, c_in, c_in, n_heads=n_heads),
+                n_heads
             )
         elif kernel_type == "relative_position":
             self.kernel = RelativePositionKernel(
