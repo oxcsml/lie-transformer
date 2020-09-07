@@ -17,7 +17,9 @@ flags.DEFINE_integer("dim_hidden", 512, "Dimension of features to use in each la
 flags.DEFINE_string(
     "activation_function", "swish", "Activation function to use in the network"
 )
-flags.DEFINE_boolean("layer_norm", True, "Use layer norm in the layers")
+flags.DEFINE_boolean(
+    "layer_norm", "pre", "Use layer norm in the layers. False/[pre]/post"
+)
 flags.DEFINE_boolean(
     "mean_pooling",
     True,
@@ -108,6 +110,7 @@ def load(config, **unused_kwargs):
         batch_norm=config.batch_norm,
         fill=config.fill,
         mc_samples=config.mc_samples,
+        pre_layer_norm=config.pre_layer_norm,
     )
 
     # predictor.net[-1][-1].weight.data = predictor.net[-1][-1].weight * (0.205 / 0.005)

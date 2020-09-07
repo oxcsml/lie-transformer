@@ -14,11 +14,12 @@ from eqv_transformer.multihead_neural import MultiheadWeightNet
 
 
 class SumKernel(nn.Module):
-    def __init__(self, location_kernel, feature_kernel):
+    def __init__(self, location_kernel, feature_kernel, n_heads):
         super().__init__()
 
         self.location_kernel = location_kernel
         self.feature_kernel = feature_kernel
+        self.n_heads = n_heads
 
     def forward(self, pairwise_locations, mask, query_features, key_features, nbhd_idx):
         # Expand across head dimension TODO: possibly wasteful and could avoid with a special linear layer
@@ -123,8 +124,12 @@ class RelativePositionKernel(nn.Module):
         self.W_k = nn.Linear(feature_dim, embed_dim, bias=bias)
         self.W_l = nn.Linear(position_dim, embed_dim, bias=bias)
 
-        self.u = nn.Parameter(torch.zeros([self.n_heads, 1, self.head_dim]))
-        self.v = nn.Parameter(torch.zeros([self.n_heads, 1, self.head_dim]))
+        self.u = nn.Parameter(
+            torch.zeros([self.n_heads, 1, self.head_dim], requires_grad=True)
+        )
+        self.v = nn.Parameter(
+            torch.zeros([self.n_heads, 1, self.head_dim], requires_grad=True)
+        )
 
     def forward(self, pairwise_locations, mask, query_features, key_features, nbhd_idx):
 
@@ -141,24 +146,24 @@ class RelativePositionKernel(nn.Module):
         v = self.v.repeat([mask.shape[0], 1, 1])
         nbhd_idx = nbhd_idx.repeat_interleave(self.n_heads, dim=0)
 
-        # Batch indicies
-        B = (
-            torch.arange(nbhd_idx.shape[0], device=nbhd_idx.device)
-            .long()[:, None, None]
+        # Get NNS indexes
+        NNS = (
+            torch.arange(nbhd_idx.shape[1], device=nbhd_idx.device)[None, :, None]
+            .long()
             .expand(*nbhd_idx.shape)
         )
 
-        # Get NNS indexes
-        NNS = (
-            torch.arange(nbhd_idx.shape[1], device=nbhd_idx.device)
-            .long()[None, :, None]
+        # Batch indicies
+        B = (
+            torch.arange(nbhd_idx.shape[0], device=nbhd_idx.device)[:, None, None]
+            .long()
             .expand(*nbhd_idx.shape)
         )
 
         A_ = (
             Q.bmm(K.transpose(1, 2))[B, NNS, nbhd_idx]
             + self.lamda * (e @ (Q + v).unsqueeze(-1)).squeeze()
-            + K @ u.transpose(1, 2)
+            + (u @ K.transpose(1, 2))[B, 0, nbhd_idx]
         ) / math.sqrt(self.head_dim)
 
         return rearrange(A_, "(b h) n m -> b n m h", h=self.n_heads)
@@ -171,7 +176,6 @@ class EquivairantMultiheadAttention(nn.Module):
         c_out,
         n_heads,
         group,
-        layer_norm=False,
         kernel_type="mlp",
         kernel_dim=16,
         act="swish",
@@ -201,6 +205,7 @@ class EquivairantMultiheadAttention(nn.Module):
                     bn=bn,
                 ),
                 DotProductKernel(c_in, c_in, c_in, n_heads=n_heads),
+                n_heads,
             )
         elif kernel_type == "relative_position":
             self.kernel = RelativePositionKernel(
@@ -335,7 +340,7 @@ class EquivairantMultiheadAttention(nn.Module):
 
         # Sum over the coefficients
         # TODO: Currently allows self interaction in the attention sum. Some pre matrices?
-        # (bs, n * ns, nbhd_size, h), (bs, n * ns, nbhd_size, h, c_out / h) -> (bs, n * ns, nbhd_size, h)
+        # (bs, n * ns, nbhd_size, h), (bs, n * ns, nbhd_size, h, c_out / h) -> (bs, n * ns, nbhd_size, h, c_out / h)
         coset_functions = (softmax_attention.unsqueeze(-1) * nbhd_coset_functions).sum(
             dim=2
         )
@@ -358,9 +363,11 @@ class EquivariantTransformerBlock(nn.Module):
         kernel_type="mlp",
         kernel_dim=16,
         kernel_act="swish",
+        hidden_dim_factor=1,
         batch_norm=False,
         mc_samples=0,
         fill=1.0,
+        pre_layer_norm=True,
     ):
         super().__init__()
         self.ema = EquivairantMultiheadAttention(
@@ -368,7 +375,6 @@ class EquivariantTransformerBlock(nn.Module):
             dim,
             n_heads,
             group,
-            layer_norm=layer_norm,
             kernel_type=kernel_type,
             kernel_dim=kernel_dim,
             act=kernel_act,
@@ -376,11 +382,44 @@ class EquivariantTransformerBlock(nn.Module):
             mc_samples=mc_samples,
             fill=fill,
         )
-        self.mlp = nn.Sequential(nn.Linear(dim, dim), Swish(), nn.Linear(dim, dim))
+        # TODO: temp bigger inner dim as per Attention is All You Need
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, int(hidden_dim_factor * dim)),
+            Swish(),
+            nn.Linear(int(hidden_dim_factor * dim), dim),
+        )
 
         if layer_norm:
             self.ln_ema = nn.LayerNorm(dim)
             self.ln_mlp = nn.LayerNorm(dim)
+
+        if not layer_norm:
+            attention_function = (
+                lambda pairwise_g, coset_functions, mask: coset_functions
+                + self.ema((pairwise_g, coset_functions, mask))[1]
+            )
+            mlp_function = lambda coset_functions: coset_functions + self.mlp(
+                coset_functions
+            )
+        else:
+            if layer_norm == "pre":
+                attention_function = (
+                    lambda pairwise_g, coset_functions, mask: coset_functions
+                    + self.ema((pairwise_g, self.ln_ema(coset_functions), mask))[1]
+                )
+                mlp_function = lambda coset_functions: coset_functions + self.mlp(
+                    self.ln_mlp(coset_functions)
+                )
+            elif layer_norm == "post":
+                attention_function = (
+                    lambda pairwise_g, coset_functions, mask: coset_functions
+                    + self.ln_ema(self.ema((pairwise_g, coset_functions, mask))[1])
+                )
+                mlp_function = lambda coset_functions: coset_functions + self.ln_mlp(
+                    self.mlp(coset_functions)
+                )
+            else:
+                raise ValueError(f"{layer_norm} is invalid layernorm type")
 
     def forward(self, lifted_data):
         pairwise_g, coset_functions, mask = lifted_data
@@ -448,6 +487,7 @@ class EquivariantTransformer(nn.Module):
         batch_norm=False,
         mc_samples=0,
         fill=1.0,
+        pre_layer_norm=True,
     ):
         super().__init__()
 
@@ -468,6 +508,7 @@ class EquivariantTransformer(nn.Module):
             batch_norm=batch_norm,
             mc_samples=mc_samples,
             fill=fill,
+            pre_layer_norm=pre_layer_norm,
         )
 
         self.net = nn.Sequential(
