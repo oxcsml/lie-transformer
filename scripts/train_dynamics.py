@@ -8,9 +8,9 @@ from forge import flags
 import forge.experiment_tools as fet
 from copy import deepcopy
 import deepdish as dd
+from tqdm import tqdm
 
 from eqv_transformer.train_tools import (
-    rotate,
     log_tensorboard,
     parse_reports,
     parse_reports_cpu,
@@ -18,6 +18,7 @@ from eqv_transformer.train_tools import (
     load_checkpoint,
     save_checkpoint,
     ExponentialMovingAverage,
+    nested_to,
 )
 
 
@@ -27,7 +28,7 @@ from eqv_transformer.train_tools import (
 # Command line flags
 #####################################################################################################################
 # Directories
-flags.DEFINE_string("data_dir", "data/", "Path to data directory")
+# flags.DEFINE_string("data_dir", "data/", "Path to data directory")
 flags.DEFINE_string(
     "results_dir", "checkpoints/", "Top directory for all experimental results."
 )
@@ -35,16 +36,16 @@ flags.DEFINE_string(
 # Configuration files to load
 flags.DEFINE_string(
     "data_config",
-    "configs/constellation/constellation.py",
+    "configs/dynamics/spring_dynamics_data.py",
     "Path to a data config file.",
 )
 flags.DEFINE_string(
     "model_config",
-    "configs/constellation/eqv_transformer_model.py",
+    "configs/dynamics/hlie_resnet.py",
     "Path to a model config file.",
 )
 # Job management
-flags.DEFINE_string("run_name", "main", "Name of this job and name of results folder.")
+flags.DEFINE_string("run_name", "test_dynamics", "Name of this job and name of results folder.")
 flags.DEFINE_boolean("resume", False, "Tries to resume a job if True.")
 
 # Logging
@@ -56,20 +57,21 @@ flags.DEFINE_integer(
 )
 flags.DEFINE_integer(
     "save_check_points",
-    5,
+    50,
     "frequency with which to save checkpoints, in number of epoches.",
 )
 flags.DEFINE_boolean("log_train_values", True, "Logs train values if True.")
-flags.DEFINE_float(
-    "ema_alpha", 0.99, "Alpha coefficient for exponential moving average of train logs."
-)
+# flags.DEFINE_float(
+#     "ema_alpha", 0.99, "Alpha coefficient for exponential moving average of train logs."
+# )
 
 # Optimization
-flags.DEFINE_integer("train_epochs", 200, "Maximum number of training epochs.")
-flags.DEFINE_integer("batch_size", 90, "Mini-batch size.")
-flags.DEFINE_float("learning_rate", 1e-5, "SGD learning rate.")
-flags.DEFINE_float("beta1", 0.5, "Adam Beta 1 parameter")
-flags.DEFINE_float("beta2", 0.9, "Adam Beta 2 parameter")
+flags.DEFINE_integer("train_epochs", 100, "Maximum number of training epochs.")
+flags.DEFINE_integer("batch_size", 200, "Mini-batch size.")
+flags.DEFINE_float("learning_rate", 1e-3, "SGD learning rate.")
+flags.DEFINE_float("beta1", 0.9, "Adam Beta 1 parameter") 
+flags.DEFINE_float("beta2", 0.999, "Adam Beta 2 parameter") 
+flags.DEFINE_string("lr_schedule", "cosine_annealing", "Learning rate schedule.") # TODO: need to match LieConv one. currently using PyTorch one, is it the same?
 
 # GPU device
 flags.DEFINE_integer("device", 0, "GPU to use.")
@@ -90,7 +92,11 @@ def main():
         device = "cpu"
 
     # Load data
-    train_loader, test_loader, data_name = fet.load(config.data_config, config=config)
+    dataloaders, data_name = fet.load(config.data_config, config=config)
+
+    train_loader = dataloaders['train']
+    test_loader = dataloaders['test']
+    val_loader = dataloaders['val']
 
     # Load model
     model, model_name = fet.load(config.model_config, config)
@@ -104,18 +110,10 @@ def main():
         + str(config.batch_size)
         + "_lr"
         + str(config.learning_rate)
-        + "_reps"
-        + str(config.patterns_reps)
-        + "_nheads" 
-        + str(config.num_heads)
         + "_nlayers" 
         + str(config.num_layers)
-        + "_hdim" 
-        + str(config.dim_hidden)
-        + "_kdim" 
-        + str(config.kernel_dim)
-        + "_nsamples" 
-        + str(config.lift_samples)
+        + "_width" 
+        + str(config.k)
     )
 
     results_folder_name = osp.join(data_name, model_name, run_name,)
@@ -131,12 +129,16 @@ def main():
     fet.print_flags()
 
     # Setup optimizer
-    model_params = model.encoder.parameters()
+    model_params = model.predictor.parameters()
 
     opt_learning_rate = config.learning_rate
     model_opt = torch.optim.Adam(
         model_params, lr=opt_learning_rate, betas=(config.beta1, config.beta2)
     )
+
+    if config.lr_schedule == 'cosine_annealing':
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(model_opt,
+                                                                config.train_epochs)
 
     # Try to restore model and optimizer from checkpoint
     if resume_checkpoint is not None:
@@ -163,12 +165,12 @@ def main():
     # Training
     start_t = time.time()
 
-    for epoch in range(start_epoch, config.train_epochs + 1):
+    for epoch in tqdm(range(start_epoch, config.train_epochs + 1)):
         model.train()
 
         for batch_idx, data in enumerate(train_loader):
-            data, presence, target = [d.to(device) for d in data]
-            outputs = model([data, presence], target)
+            data = nested_to(data, device, torch.float32) # the format is ((z0, sys_params, ts), true_zs) for data
+            outputs = model(data)
 
             model_opt.zero_grad()
             outputs.loss.backward(retain_graph=False)
@@ -194,12 +196,9 @@ def main():
                 with torch.no_grad():
                     reports = None
                     for data in test_loader:
-                        data, presence, target = [d.to(device) for d in data]
-                        if config.data_config == "configs/constellation/constellation.py":
-                            if config.global_rotation != 0.0:
-                                data = rotate(data, config.global_rotation)
-                        outputs = model([data, presence], target)
-                        
+                        data = nested_to(data, device, torch.float32) 
+                        outputs = model(data)
+        
                         if reports is None:
                             reports = {k: v.detach().clone().cpu() for k, v in outputs.reports.items()}
                         else:
@@ -232,12 +231,15 @@ def main():
 
             train_iter += 1
 
+        if config.lr_schedule != "none":
+            scheduler.step()
+
         if epoch % config.save_check_points == 0:
             save_checkpoint(
                 checkpoint_name, train_iter, model, model_opt, loss=outputs.loss
             )
 
-        dd.io.save(logdir + "/train_results.h5", train_reports)
+        dd.io.save(logdir + '/results_dict_train.h5', train_reports)
         dd.io.save(logdir + "/results_dict.h5", report_all)
 
         save_checkpoint(
@@ -247,6 +249,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# %%

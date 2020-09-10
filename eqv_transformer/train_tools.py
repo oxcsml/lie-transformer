@@ -36,7 +36,7 @@ def parse_reports_cpu(report_dict):
 
 def print_reports(report_dict, start_time, epoch, batch_idx, num_epochs, prefix=""):
 
-    reports = ["{}:{:.03f}".format(*item) for item in report_dict.items()]
+    reports = ["{}:{:.06f}".format(*item) for item in report_dict.items()]
     report_string = ", ".join(reports)
     if prefix:
         print(prefix, end=": ")
@@ -161,3 +161,13 @@ class ExponentialMovingAverage(nn.Module):
                 ema /= apm1
 
         return ema
+
+def nested_to(x, device, dtype):
+    """ Move a list of list of... of tensors to device"""
+    try:
+        x = x.to(device=device, dtype=dtype)
+        return x
+    except AttributeError:
+        assert isinstance(x, (list, tuple))
+        x = type(x)(nested_to(xx, device=device, dtype=dtype) for xx in x)
+        return x

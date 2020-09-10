@@ -32,7 +32,7 @@ class SumKernel(nn.Module):
 
         return self.location_kernel((None, pairwise_locations, mask))[
             1
-        ].squeeze() + self.feature_kernel(query_features, key_features, nbhd_idx)
+        ].squeeze() + self.feature_kernel(key_features, query_features, nbhd_idx)
         # return self.feature_kernel(query_features, key_features, nbhd_idx)
 
 
