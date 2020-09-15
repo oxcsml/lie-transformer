@@ -6,6 +6,10 @@ from torch import nn
 import forge.experiment_tools as fet
 from math import cos, pi, sin
 
+# from matplotlib.lines import Line2D
+# import matplotlib.pyplot as plt
+# import numpy as np
+
 
 def rotate(X, angle):
     rotation_matrix = torch.tensor(
@@ -171,3 +175,25 @@ def nested_to(x, device, dtype):
         assert isinstance(x, (list, tuple))
         x = type(x)(nested_to(xx, device=device, dtype=dtype) for xx in x)
         return x
+
+def param_count(model):
+    total_params = sum(p.numel() for p in model.parameters())
+    return total_params
+
+
+def get_component(module, description):
+    "This is specifically to be used with module = model.predictor.net for eqv_transformer."
+    idx = description[0]
+    attrs = description[1]
+    module = module[idx]
+    for attr in attrs:
+        module = getattr(module, attr)
+    return module
+    
+def get_average_norm(module, p=1):
+    norm = 0
+    for param in module.parameters():
+        norm += param.norm(p)
+    return norm / param_count(module)
+    
+    
