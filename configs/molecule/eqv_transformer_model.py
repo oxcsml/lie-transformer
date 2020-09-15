@@ -29,6 +29,11 @@ flags.DEFINE_string(
     "Type of norm to use in the attention block. none/[layer/batch]_[pre/post]",
 )
 flags.DEFINE_string(
+    "block_norm",
+    "none",
+    "Type of norm to use in the final MLP layers block. none/layer/batch",
+)
+flags.DEFINE_string(
     "kernel_norm", "none", "The type of norm to use in the location kernels. none/batch"
 )
 flags.DEFINE_string(
@@ -51,6 +56,9 @@ flags.DEFINE_float(
     "fill", 1.0, "Select mc_samples from K nearest mc_samples/fill points"
 )
 flags.DEFINE_integer("model_seed", 0, "Model rng seed")
+flags.DEFINE_string(
+    "architecture", "model_1", "The model architecture to use. model_1/lieconv"
+)
 
 
 class MoleculeEquivariantTransformer(EquivariantTransformer):

@@ -525,12 +525,14 @@ class EquivariantTransformer(nn.Module):
         group=SE3(0.2),
         liftsamples=1,
         block_norm="layer_pre",
+        output_norm="none",
         kernel_norm="none",
         kernel_type="mlp",
         kernel_dim=16,
         kernel_act="swish",
         mc_samples=0,
         fill=1.0,
+        architecture="model_1",
     ):
         super().__init__()
 
@@ -553,20 +555,70 @@ class EquivariantTransformer(nn.Module):
             fill=fill,
         )
 
-        self.net = nn.Sequential(
-            Pass(nn.Linear(dim_input, dim_hidden[0]), dim=1),
-            *[attention_block(dim_hidden[i], num_heads[i]) for i in range(num_layers)],
-            GlobalPool(mean=global_pool_mean)
-            if global_pool
-            else Expression(lambda x: x[1]),
-            nn.Sequential(
-                nn.Linear(dim_hidden[-1], dim_hidden[-1]),
-                Swish(),
-                nn.Linear(dim_hidden[-1], dim_hidden[-1]),
-                Swish(),
-                nn.Linear(dim_hidden[-1], dim_output),
-            ),
-        )
+        if architecture == "model_1":
+            if output_norm == "batch":
+                norm1 = nn.BatchNorm1d(dim_hidden[-1])
+                norm2 = nn.BatchNorm1d(dim_hidden[-1])
+                norm3 = nn.BatchNorm1d(dim_hidden[-1])
+            elif output_norm == "linear":
+                norm1 = nn.LayerNorm()
+                norm2 = nn.LayerNorm()
+                norm3 = nn.LayerNorm()
+            elif output_norm == "none":
+                norm1 = nn.Sequential()
+                norm2 = nn.Sequential()
+                norm3 = nn.Sequential()
+            else:
+                raise ValueError(f"{output_norm} is not a valid norm type")
+
+            self.net = nn.Sequential(
+                Pass(nn.Linear(dim_input, dim_hidden[0]), dim=1),
+                *[
+                    attention_block(dim_hidden[i], num_heads[i])
+                    for i in range(num_layers)
+                ],
+                GlobalPool(mean=global_pool_mean)
+                if global_pool
+                else Expression(lambda x: x[1]),
+                nn.Sequential(
+                    norm1,
+                    Swish(),
+                    nn.Linear(dim_hidden[-1], dim_hidden[-1]),
+                    norm2,
+                    Swish(),
+                    nn.Linear(dim_hidden[-1], dim_hidden[-1]),
+                    norm3,
+                    Swish(),
+                    nn.Linear(dim_hidden[-1], dim_output),
+                ),
+            )
+        elif architecture == "lieconv":
+            if output_norm == "batch":
+                norm = nn.BatchNorm1d(dim_hidden[-1])
+            # elif output_norm == "linear":
+            #     norm1 = nn.LayerNorm()
+            #     norm2 = nn.LayerNorm()
+            #     norm3 = nn.LayerNorm()
+            elif output_norm == "none":
+                norm = nn.Sequential()
+            else:
+                raise ValueError(f"{output_norm} is not a valid norm type")
+
+            self.net = nn.Sequential(
+                Pass(nn.Linear(dim_input, dim_hidden[0]), dim=1),
+                *[
+                    attention_block(dim_hidden[i], num_heads[i])
+                    for i in range(num_layers)
+                ],
+                norm,
+                Pass(Swish() if act == "swish" else nn.ReLU(), dim=1),
+                Pass(nn.Linear(dim_hidden[-1], dim_output), dim=1),
+                GlobalPool(mean=global_pool_mean)
+                if global_pool
+                else Expression(lambda x: x[1]),
+            )
+        else:
+            raise ValueError(f"{architecture} is not a valid architecture")
 
         self.group = group
         self.liftsamples = liftsamples
