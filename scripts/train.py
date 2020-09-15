@@ -237,12 +237,12 @@ def main():
                 checkpoint_name, train_iter, model, model_opt, loss=outputs.loss
             )
 
-        dd.io.save(logdir + "/train_results.h5", train_reports)
+        dd.io.save(logdir + '/results_dict_train.h5', train_reports)
         dd.io.save(logdir + "/results_dict.h5", report_all)
 
-        save_checkpoint(
-            checkpoint_name, train_iter, model, model_opt, loss=outputs.loss
-        )
+    save_checkpoint(
+        checkpoint_name, train_iter, model, model_opt, loss=outputs.loss
+    )
 
 
 if __name__ == "__main__":
