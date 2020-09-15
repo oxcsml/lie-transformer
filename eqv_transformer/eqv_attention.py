@@ -124,8 +124,12 @@ class RelativePositionKernel(nn.Module):
         self.W_k = nn.Linear(feature_dim, embed_dim, bias=bias)
         self.W_l = nn.Linear(position_dim, embed_dim, bias=bias)
 
-        self.u = nn.Parameter(torch.zeros([self.n_heads, 1, self.head_dim]))
-        self.v = nn.Parameter(torch.zeros([self.n_heads, 1, self.head_dim]))
+        self.u = nn.Parameter(
+            torch.zeros([self.n_heads, 1, self.head_dim], requires_grad=True)
+        )
+        self.v = nn.Parameter(
+            torch.zeros([self.n_heads, 1, self.head_dim], requires_grad=True)
+        )
 
     def forward(self, pairwise_locations, mask, query_features, key_features, nbhd_idx):
 
@@ -142,24 +146,24 @@ class RelativePositionKernel(nn.Module):
         v = self.v.repeat([mask.shape[0], 1, 1])
         nbhd_idx = nbhd_idx.repeat_interleave(self.n_heads, dim=0)
 
-        # Batch indicies
-        B = (
-            torch.arange(nbhd_idx.shape[0], device=nbhd_idx.device)
-            .long()[:, None, None]
+        # Get NNS indexes
+        NNS = (
+            torch.arange(nbhd_idx.shape[1], device=nbhd_idx.device)[None, :, None]
+            .long()
             .expand(*nbhd_idx.shape)
         )
 
-        # Get NNS indexes
-        NNS = (
-            torch.arange(nbhd_idx.shape[1], device=nbhd_idx.device)
-            .long()[None, :, None]
+        # Batch indicies
+        B = (
+            torch.arange(nbhd_idx.shape[0], device=nbhd_idx.device)[:, None, None]
+            .long()
             .expand(*nbhd_idx.shape)
         )
 
         A_ = (
             Q.bmm(K.transpose(1, 2))[B, NNS, nbhd_idx]
             + self.lamda * (e @ (Q + v).unsqueeze(-1)).squeeze()
-            + K @ u.transpose(1, 2)
+            + (u @ K.transpose(1, 2))[B, 0, nbhd_idx]
         ) / math.sqrt(self.head_dim)
 
         return rearrange(A_, "(b h) n m -> b n m h", h=self.n_heads)
@@ -172,7 +176,6 @@ class EquivairantMultiheadAttention(nn.Module):
         c_out,
         n_heads,
         group,
-        layer_norm=False,
         kernel_type="mlp",
         kernel_dim=16,
         act="swish",
@@ -202,7 +205,7 @@ class EquivairantMultiheadAttention(nn.Module):
                     bn=bn,
                 ),
                 DotProductKernel(c_in, c_in, c_in, n_heads=n_heads),
-                n_heads
+                n_heads,
             )
         elif kernel_type == "relative_position":
             self.kernel = RelativePositionKernel(
@@ -212,6 +215,25 @@ class EquivairantMultiheadAttention(nn.Module):
                 n_heads=n_heads,
                 bias=True,
                 lamda=1.0,
+            )
+        elif kernel_type == "dot_product_only":
+            self.kernel = SumKernel(
+                lambda x: torch.zeros(x[2].shape + (n_heads,), device=x[2].device),
+                DotProductKernel(c_in, c_in, c_in, n_heads=n_heads),
+                n_heads,
+            )
+        elif kernel_type == "location_only":
+            self.kernel = SumKernel(
+                MultiheadWeightNet(
+                    group.lie_dim + 2 * group.q_dim,
+                    1,
+                    n_heads,
+                    hid_dim=kernel_dim,
+                    act=act,
+                    bn=bn,
+                ),
+                lambda x: torch.zeros(x[0].shape[:-1] + (n_heads,)),
+                n_heads,
             )
         else:
             raise ValueError(f"{kernel_type} is not a valid kernel type")
@@ -337,7 +359,7 @@ class EquivairantMultiheadAttention(nn.Module):
 
         # Sum over the coefficients
         # TODO: Currently allows self interaction in the attention sum. Some pre matrices?
-        # (bs, n * ns, nbhd_size, h), (bs, n * ns, nbhd_size, h, c_out / h) -> (bs, n * ns, nbhd_size, h)
+        # (bs, n * ns, nbhd_size, h), (bs, n * ns, nbhd_size, h, c_out / h) -> (bs, n * ns, nbhd_size, h, c_out / h)
         coset_functions = (softmax_attention.unsqueeze(-1) * nbhd_coset_functions).sum(
             dim=2
         )
@@ -356,11 +378,12 @@ class EquivariantTransformerBlock(nn.Module):
         dim,
         n_heads,
         group,
-        layer_norm=False,
+        block_norm="layer_pre",
+        kernel_norm="none",
         kernel_type="mlp",
         kernel_dim=16,
         kernel_act="swish",
-        batch_norm=False,
+        hidden_dim_factor=1,
         mc_samples=0,
         fill=1.0,
     ):
@@ -370,40 +393,98 @@ class EquivariantTransformerBlock(nn.Module):
             dim,
             n_heads,
             group,
-            layer_norm=layer_norm,
             kernel_type=kernel_type,
             kernel_dim=kernel_dim,
             act=kernel_act,
-            bn=batch_norm,
+            bn=kernel_norm == "batch",
             mc_samples=mc_samples,
             fill=fill,
         )
-        self.mlp = nn.Sequential(nn.Linear(dim, dim), Swish(), nn.Linear(dim, dim))
+        # TODO: temp bigger inner dim as per Attention is All You Need
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, int(hidden_dim_factor * dim)),
+            Swish(),
+            nn.Linear(int(hidden_dim_factor * dim), dim),
+        )
 
-        if layer_norm:
+        if block_norm == "none":
+            self.attention_function = (
+                lambda pairwise_g, coset_functions, mask: coset_functions
+                + self.ema((pairwise_g, coset_functions, mask))[1]
+            )
+            self.mlp_function = lambda coset_functions: coset_functions + self.mlp(
+                coset_functions
+            )
+        elif block_norm == "layer_pre":
             self.ln_ema = nn.LayerNorm(dim)
             self.ln_mlp = nn.LayerNorm(dim)
+
+            self.attention_function = (
+                lambda pairwise_g, coset_functions, mask: coset_functions
+                + self.ema((pairwise_g, self.ln_ema(coset_functions), mask))[1]
+            )
+            self.mlp_function = lambda coset_functions: coset_functions + self.mlp(
+                self.ln_mlp(coset_functions)
+            )
+        elif block_norm == "layer_post":
+            self.ln_ema = nn.LayerNorm(dim)
+            self.ln_mlp = nn.LayerNorm(dim)
+
+            self.attention_function = (
+                lambda pairwise_g, coset_functions, mask: coset_functions
+                + self.ln_ema(self.ema((pairwise_g, coset_functions, mask))[1])
+            )
+            self.mlp_function = lambda coset_functions: coset_functions + self.ln_mlp(
+                self.mlp(coset_functions)
+            )
+        elif block_norm == "batch_pre":
+            self.bn_ema = MaskBatchNormNd(dim)
+            self.bn_mlp = MaskBatchNormNd(dim)
+
+            self.attention_function = (
+                lambda pairwise_g, coset_functions, mask: coset_functions
+                + self.ema((pairwise_g, self.bn_ema(coset_functions), mask))[1]
+            )
+            self.mlp_function = lambda coset_functions: coset_functions + self.mlp(
+                self.bn_mlp(coset_functions)
+            )
+        elif block_norm == "batch_post":
+            self.bn_ema = MaskBatchNormNd(dim)
+            self.bn_mlp = MaskBatchNormNd(dim)
+
+            self.attention_function = (
+                lambda pairwise_g, coset_functions, mask: coset_functions
+                + self.bn_ema(self.ema((pairwise_g, coset_functions, mask))[1])
+            )
+            self.mlp_function = lambda coset_functions: coset_functions + self.bn_mlp(
+                self.mlp(coset_functions)
+            )
+        else:
+            raise ValueError(f"{block_norm} is invalid block norm type")
 
     def forward(self, lifted_data):
         pairwise_g, coset_functions, mask = lifted_data
 
-        # optional layer norm
-        if getattr(self, "ln_ema", None) is not None:
-            # equivariant attention with residual connection
-            coset_functions = (
-                coset_functions
-                + self.ema((pairwise_g, self.ln_ema(coset_functions), mask))[1]
-            )
-        else:
-            coset_functions = (
-                coset_functions + self.ema((pairwise_g, coset_functions, mask))[1]
-            )
+        # # optional layer norm
+        # if getattr(self, "ln_ema", None) is not None:
+        #     # equivariant attention with residual connection
+        #     coset_functions = (
+        #         coset_functions
+        #         + self.ema((pairwise_g, self.ln_ema(coset_functions), mask))[1]
+        #     )
+        # else:
+        #     coset_functions = (
+        #         coset_functions + self.ema((pairwise_g, coset_functions, mask))[1]
+        #     )
 
-        # optional layer norm
-        if getattr(self, "ln_mlp", None) is not None:
-            coset_functions = coset_functions + self.mlp(self.ln_mlp(coset_functions))
-        else:
-            coset_functions = coset_functions + self.mlp(coset_functions)
+        # # optional layer norm
+        # if getattr(self, "ln_mlp", None) is not None:
+        #     coset_functions = coset_functions + self.mlp(self.ln_mlp(coset_functions))
+        # else:
+        #     coset_functions = coset_functions + self.mlp(coset_functions)
+
+        coset_functions = self.attention_function(pairwise_g, coset_functions, mask)
+        coset_functions = self.mlp_function(coset_functions)
 
         return (pairwise_g, coset_functions, mask)
 
@@ -439,17 +520,19 @@ class EquivariantTransformer(nn.Module):
         dim_hidden,
         num_layers,
         num_heads,
-        layer_norm=False,
         global_pool=True,
         global_pool_mean=True,
         group=SE3(0.2),
         liftsamples=1,
+        block_norm="layer_pre",
+        output_norm="none",
+        kernel_norm="none",
         kernel_type="mlp",
         kernel_dim=16,
         kernel_act="swish",
-        batch_norm=False,
         mc_samples=0,
         fill=1.0,
+        architecture="model_1",
     ):
         super().__init__()
 
@@ -463,29 +546,79 @@ class EquivariantTransformer(nn.Module):
             dim,
             n_head,
             group,
-            layer_norm=layer_norm,
+            block_norm=block_norm,
+            kernel_norm=kernel_norm,
             kernel_type=kernel_type,
             kernel_dim=kernel_dim,
             kernel_act=kernel_act,
-            batch_norm=batch_norm,
             mc_samples=mc_samples,
             fill=fill,
         )
 
-        self.net = nn.Sequential(
-            Pass(nn.Linear(dim_input, dim_hidden[0]), dim=1),
-            *[attention_block(dim_hidden[i], num_heads[i]) for i in range(num_layers)],
-            GlobalPool(mean=global_pool_mean)
-            if global_pool
-            else Expression(lambda x: x[1]),
-            nn.Sequential(
-                nn.Linear(dim_hidden[-1], dim_hidden[-1]),
-                Swish(),
-                nn.Linear(dim_hidden[-1], dim_hidden[-1]),
-                Swish(),
-                nn.Linear(dim_hidden[-1], dim_output),
-            ),
-        )
+        if architecture == "model_1":
+            if output_norm == "batch":
+                norm1 = nn.BatchNorm1d(dim_hidden[-1])
+                norm2 = nn.BatchNorm1d(dim_hidden[-1])
+                norm3 = nn.BatchNorm1d(dim_hidden[-1])
+            elif output_norm == "linear":
+                norm1 = nn.LayerNorm()
+                norm2 = nn.LayerNorm()
+                norm3 = nn.LayerNorm()
+            elif output_norm == "none":
+                norm1 = nn.Sequential()
+                norm2 = nn.Sequential()
+                norm3 = nn.Sequential()
+            else:
+                raise ValueError(f"{output_norm} is not a valid norm type")
+
+            self.net = nn.Sequential(
+                Pass(nn.Linear(dim_input, dim_hidden[0]), dim=1),
+                *[
+                    attention_block(dim_hidden[i], num_heads[i])
+                    for i in range(num_layers)
+                ],
+                GlobalPool(mean=global_pool_mean)
+                if global_pool
+                else Expression(lambda x: x[1]),
+                nn.Sequential(
+                    norm1,
+                    Swish(),
+                    nn.Linear(dim_hidden[-1], dim_hidden[-1]),
+                    norm2,
+                    Swish(),
+                    nn.Linear(dim_hidden[-1], dim_hidden[-1]),
+                    norm3,
+                    Swish(),
+                    nn.Linear(dim_hidden[-1], dim_output),
+                ),
+            )
+        elif architecture == "lieconv":
+            if output_norm == "batch":
+                norm = nn.BatchNorm1d(dim_hidden[-1])
+            # elif output_norm == "linear":
+            #     norm1 = nn.LayerNorm()
+            #     norm2 = nn.LayerNorm()
+            #     norm3 = nn.LayerNorm()
+            elif output_norm == "none":
+                norm = nn.Sequential()
+            else:
+                raise ValueError(f"{output_norm} is not a valid norm type")
+
+            self.net = nn.Sequential(
+                Pass(nn.Linear(dim_input, dim_hidden[0]), dim=1),
+                *[
+                    attention_block(dim_hidden[i], num_heads[i])
+                    for i in range(num_layers)
+                ],
+                norm,
+                Pass(Swish() if act == "swish" else nn.ReLU(), dim=1),
+                Pass(nn.Linear(dim_hidden[-1], dim_output), dim=1),
+                GlobalPool(mean=global_pool_mean)
+                if global_pool
+                else Expression(lambda x: x[1]),
+            )
+        else:
+            raise ValueError(f"{architecture} is not a valid architecture")
 
         self.group = group
         self.liftsamples = liftsamples

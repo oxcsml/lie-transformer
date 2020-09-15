@@ -35,7 +35,9 @@ def load(config, **unused_kwargs):
             os.path.join(config.data_dir, "qm9")
         )
         if config.subsample_trainset != 1.0:
-            datasets.update(split_dataset(datasets["train"], config.subsample_trainset))
+            datasets.update(
+                split_dataset(datasets["train"], {"train": config.subsample_trainset})
+            )
         if config.batch_fit != 0:
             datasets.update(
                 split_dataset(datasets["train"], {"train": config.batch_fit})

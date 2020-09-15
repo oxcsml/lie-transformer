@@ -109,6 +109,7 @@ def main():
     model.to(device)
 
     if config.parameter_count:
+        print(model)
         print("============================================================")
         print(
             f"{model_name} parameters: {sum(p.numel() for p in model.parameters()):.5e}"
@@ -133,6 +134,12 @@ def main():
 
     if config.lr_schedule != "none":
         run_name += "_" + config.lr_schedule
+
+    if config.block_norm != "none":
+        run_name += "_" + config.block_norm
+
+    if config.kernel_norm != "none":
+        run_name += "_" + config.kernel_norm
 
     results_folder_name = osp.join(data_name, model_name, run_name,)
 
@@ -229,6 +236,7 @@ def main():
 
             # Logging
             if batch_idx % config.evaluate_every == 0:
+                model.eval()
                 with torch.no_grad():
                     valid_mae = 0.0
                     for data in dataloaders["valid"]:
@@ -258,6 +266,7 @@ def main():
 
         # Test model at end of batch
         with torch.no_grad():
+            model.eval()
             test_mae = 0.0
             for data in dataloaders["test"]:
                 data = {k: v.to(device) for k, v in data.items()}
