@@ -40,6 +40,8 @@ flags.DEFINE_integer(
     10,
     "Number of distance moments to use if using distance moment features",
 )
+# flags.DEFINE_boolean("location_attention", True, "Use location kernel for attention weights.")
+# flags.DEFINE_string("attention_fn", "softmax", "How to form the attention weights from the 'logits'.")
 
 
 def constant_features(X, presence):
@@ -114,7 +116,7 @@ def load(config, **unused_kwargs):
         feature_function = constant_features
     elif config.content_type == "constant":
         dim_input = 1
-        feature_function = lambda x, presence: torch.ones(x.shape[:-1]).unsqueeze(-1)
+        feature_function = lambda X, presence: torch.ones(X.shape[:-1], dtype=X.dtype, device=X.device).unsqueeze(-1)
     elif config.content_type == "pairwise_distances":
         dim_input = config.patterns_reps * 17 - 1
         feature_function = pairwise_distance_features  # i.e. use the arg dim_input
@@ -147,6 +149,8 @@ def load(config, **unused_kwargs):
         kernel_dim=config.kernel_dim,
         kernel_act=config.activation_function,
         batch_norm=config.batch_norm,
+        # location_attention=config.location_attention,
+        # attention_fn=config.attention_fn,
     )
 
     classifier = Classifier(predictor)
