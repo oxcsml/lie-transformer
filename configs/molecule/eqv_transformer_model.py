@@ -18,21 +18,25 @@ flags.DEFINE_string(
     "activation_function", "swish", "Activation function to use in the network"
 )
 flags.DEFINE_boolean(
-    "layer_norm", "pre", "Use layer norm in the layers. False/[pre]/post"
-)
-flags.DEFINE_boolean(
     "mean_pooling",
     True,
     "Use mean pooling insteave of sum pooling in the invariant layer",
 )
 flags.DEFINE_integer("num_heads", 8, "Number of attention heads in each layer")
 flags.DEFINE_string(
+    "block_norm",
+    "layer_pre",
+    "Type of norm to use in the attention block. none/[layer/batch]_[pre/post]",
+)
+flags.DEFINE_string(
+    "kernel_norm", "none", "The type of norm to use in the location kernels. none/batch"
+)
+flags.DEFINE_string(
     "kernel_type",
     "mlp",
-    "Selects the type of attention kernel to use. mlp of relative_position are valid",
+    "Selects the type of attention kernel to use. mlp/relative_position/dot_product are valid",
 )
 flags.DEFINE_integer("kernel_dim", 16, "Hidden layer size to use in kernel MLPs")
-flags.DEFINE_boolean("batch_norm", False, "Use batch norm in the kernel MLPs")
 flags.DEFINE_integer("num_layers", 6, "Number of ResNet layers to use")
 flags.DEFINE_string("group", "SE3", "Group to be invariant to")
 flags.DEFINE_integer(
@@ -100,17 +104,16 @@ def load(config, **unused_kwargs):
         dim_hidden=config.dim_hidden,
         num_layers=config.num_layers,
         num_heads=config.num_heads,
-        layer_norm=config.layer_norm,
         global_pool=True,
         global_pool_mean=config.mean_pooling,
         liftsamples=config.lift_samples,
+        block_norm=config.block_norm,
+        kernel_norm=config.kernel_norm,
         kernel_type=config.kernel_type,
         kernel_dim=config.kernel_dim,
         kernel_act=config.activation_function,
-        batch_norm=config.batch_norm,
         fill=config.fill,
         mc_samples=config.mc_samples,
-        pre_layer_norm=config.pre_layer_norm,
     )
 
     # predictor.net[-1][-1].weight.data = predictor.net[-1][-1].weight * (0.205 / 0.005)

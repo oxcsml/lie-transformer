@@ -216,6 +216,25 @@ class EquivairantMultiheadAttention(nn.Module):
                 bias=True,
                 lamda=1.0,
             )
+        elif kernel_type == "dot_product_only":
+            self.kernel = SumKernel(
+                lambda x: torch.zeros(x[2].shape + (n_heads,), device=x[2].device),
+                DotProductKernel(c_in, c_in, c_in, n_heads=n_heads),
+                n_heads,
+            )
+        elif kernel_type == "location_only":
+            self.kernel = SumKernel(
+                MultiheadWeightNet(
+                    group.lie_dim + 2 * group.q_dim,
+                    1,
+                    n_heads,
+                    hid_dim=kernel_dim,
+                    act=act,
+                    bn=bn,
+                ),
+                lambda x: torch.zeros(x[0].shape[:-1] + (n_heads,)),
+                n_heads,
+            )
         else:
             raise ValueError(f"{kernel_type} is not a valid kernel type")
 
@@ -359,15 +378,14 @@ class EquivariantTransformerBlock(nn.Module):
         dim,
         n_heads,
         group,
-        layer_norm=False,
+        block_norm="layer_pre",
+        kernel_norm="none",
         kernel_type="mlp",
         kernel_dim=16,
         kernel_act="swish",
         hidden_dim_factor=1,
-        batch_norm=False,
         mc_samples=0,
         fill=1.0,
-        pre_layer_norm=True,
     ):
         super().__init__()
         self.ema = EquivairantMultiheadAttention(
@@ -378,7 +396,7 @@ class EquivariantTransformerBlock(nn.Module):
             kernel_type=kernel_type,
             kernel_dim=kernel_dim,
             act=kernel_act,
-            bn=batch_norm,
+            bn=kernel_norm == "batch",
             mc_samples=mc_samples,
             fill=fill,
         )
@@ -389,58 +407,84 @@ class EquivariantTransformerBlock(nn.Module):
             nn.Linear(int(hidden_dim_factor * dim), dim),
         )
 
-        if layer_norm:
-            self.ln_ema = nn.LayerNorm(dim)
-            self.ln_mlp = nn.LayerNorm(dim)
-
-        if not layer_norm:
-            attention_function = (
+        if block_norm == "none":
+            self.attention_function = (
                 lambda pairwise_g, coset_functions, mask: coset_functions
                 + self.ema((pairwise_g, coset_functions, mask))[1]
             )
-            mlp_function = lambda coset_functions: coset_functions + self.mlp(
+            self.mlp_function = lambda coset_functions: coset_functions + self.mlp(
                 coset_functions
             )
+        elif block_norm == "layer_pre":
+            self.ln_ema = nn.LayerNorm(dim)
+            self.ln_mlp = nn.LayerNorm(dim)
+
+            self.attention_function = (
+                lambda pairwise_g, coset_functions, mask: coset_functions
+                + self.ema((pairwise_g, self.ln_ema(coset_functions), mask))[1]
+            )
+            self.mlp_function = lambda coset_functions: coset_functions + self.mlp(
+                self.ln_mlp(coset_functions)
+            )
+        elif block_norm == "layer_post":
+            self.ln_ema = nn.LayerNorm(dim)
+            self.ln_mlp = nn.LayerNorm(dim)
+
+            self.attention_function = (
+                lambda pairwise_g, coset_functions, mask: coset_functions
+                + self.ln_ema(self.ema((pairwise_g, coset_functions, mask))[1])
+            )
+            self.mlp_function = lambda coset_functions: coset_functions + self.ln_mlp(
+                self.mlp(coset_functions)
+            )
+        elif block_norm == "batch_pre":
+            self.bn_ema = MaskBatchNormNd(dim)
+            self.bn_mlp = MaskBatchNormNd(dim)
+
+            self.attention_function = (
+                lambda pairwise_g, coset_functions, mask: coset_functions
+                + self.ema((pairwise_g, self.bn_ema(coset_functions), mask))[1]
+            )
+            self.mlp_function = lambda coset_functions: coset_functions + self.mlp(
+                self.bn_mlp(coset_functions)
+            )
+        elif block_norm == "batch_post":
+            self.bn_ema = MaskBatchNormNd(dim)
+            self.bn_mlp = MaskBatchNormNd(dim)
+
+            self.attention_function = (
+                lambda pairwise_g, coset_functions, mask: coset_functions
+                + self.bn_ema(self.ema((pairwise_g, coset_functions, mask))[1])
+            )
+            self.mlp_function = lambda coset_functions: coset_functions + self.bn_mlp(
+                self.mlp(coset_functions)
+            )
         else:
-            if layer_norm == "pre":
-                attention_function = (
-                    lambda pairwise_g, coset_functions, mask: coset_functions
-                    + self.ema((pairwise_g, self.ln_ema(coset_functions), mask))[1]
-                )
-                mlp_function = lambda coset_functions: coset_functions + self.mlp(
-                    self.ln_mlp(coset_functions)
-                )
-            elif layer_norm == "post":
-                attention_function = (
-                    lambda pairwise_g, coset_functions, mask: coset_functions
-                    + self.ln_ema(self.ema((pairwise_g, coset_functions, mask))[1])
-                )
-                mlp_function = lambda coset_functions: coset_functions + self.ln_mlp(
-                    self.mlp(coset_functions)
-                )
-            else:
-                raise ValueError(f"{layer_norm} is invalid layernorm type")
+            raise ValueError(f"{block_norm} is invalid block norm type")
 
     def forward(self, lifted_data):
         pairwise_g, coset_functions, mask = lifted_data
 
-        # optional layer norm
-        if getattr(self, "ln_ema", None) is not None:
-            # equivariant attention with residual connection
-            coset_functions = (
-                coset_functions
-                + self.ema((pairwise_g, self.ln_ema(coset_functions), mask))[1]
-            )
-        else:
-            coset_functions = (
-                coset_functions + self.ema((pairwise_g, coset_functions, mask))[1]
-            )
+        # # optional layer norm
+        # if getattr(self, "ln_ema", None) is not None:
+        #     # equivariant attention with residual connection
+        #     coset_functions = (
+        #         coset_functions
+        #         + self.ema((pairwise_g, self.ln_ema(coset_functions), mask))[1]
+        #     )
+        # else:
+        #     coset_functions = (
+        #         coset_functions + self.ema((pairwise_g, coset_functions, mask))[1]
+        #     )
 
-        # optional layer norm
-        if getattr(self, "ln_mlp", None) is not None:
-            coset_functions = coset_functions + self.mlp(self.ln_mlp(coset_functions))
-        else:
-            coset_functions = coset_functions + self.mlp(coset_functions)
+        # # optional layer norm
+        # if getattr(self, "ln_mlp", None) is not None:
+        #     coset_functions = coset_functions + self.mlp(self.ln_mlp(coset_functions))
+        # else:
+        #     coset_functions = coset_functions + self.mlp(coset_functions)
+
+        coset_functions = self.attention_function(pairwise_g, coset_functions, mask)
+        coset_functions = self.mlp_function(coset_functions)
 
         return (pairwise_g, coset_functions, mask)
 
@@ -476,18 +520,17 @@ class EquivariantTransformer(nn.Module):
         dim_hidden,
         num_layers,
         num_heads,
-        layer_norm=False,
         global_pool=True,
         global_pool_mean=True,
         group=SE3(0.2),
         liftsamples=1,
+        block_norm="layer_pre",
+        kernel_norm="none",
         kernel_type="mlp",
         kernel_dim=16,
         kernel_act="swish",
-        batch_norm=False,
         mc_samples=0,
         fill=1.0,
-        pre_layer_norm=True,
     ):
         super().__init__()
 
@@ -501,14 +544,13 @@ class EquivariantTransformer(nn.Module):
             dim,
             n_head,
             group,
-            layer_norm=layer_norm,
+            block_norm=block_norm,
+            kernel_norm=kernel_norm,
             kernel_type=kernel_type,
             kernel_dim=kernel_dim,
             kernel_act=kernel_act,
-            batch_norm=batch_norm,
             mc_samples=mc_samples,
             fill=fill,
-            pre_layer_norm=pre_layer_norm,
         )
 
         self.net = nn.Sequential(
