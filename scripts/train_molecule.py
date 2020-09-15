@@ -135,8 +135,11 @@ def main():
     if config.lr_schedule != "none":
         run_name += "_" + config.lr_schedule
 
-    if not config.layer_norm:
-        run_name += "_" + config.layer_norm
+    if config.block_norm != "none":
+        run_name += "_" + config.block_norm
+
+    if config.kernel_norm != "none":
+        run_name += "_" + config.kernel_norm
 
     results_folder_name = osp.join(data_name, model_name, run_name,)
 
