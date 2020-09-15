@@ -107,6 +107,7 @@ def load(config, **unused_kwargs):
     predictor = MoleculeEquivariantTransformer(
         config.num_species,
         config.charge_scale,
+        architecture=config.architecture,
         group=group,
         aug=config.data_augmentation,
         dim_hidden=config.dim_hidden,
@@ -116,6 +117,7 @@ def load(config, **unused_kwargs):
         global_pool_mean=config.mean_pooling,
         liftsamples=config.lift_samples,
         block_norm=config.block_norm,
+        output_norm=config.output_norm,
         kernel_norm=config.kernel_norm,
         kernel_type=config.kernel_type,
         kernel_dim=config.kernel_dim,
