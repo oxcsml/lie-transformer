@@ -9,7 +9,7 @@ from forge import flags
 flags.DEFINE_string("group", "T(2)", "Group to be invariant to.")
 flags.DEFINE_integer("k", 384, "Channel width for the network.")
 flags.DEFINE_integer("num_layers", 4, "Number of layers.")
-
+flags.DEFINE_integer("model_seed", 0, "Model rng seed")
 
 def load(config, **unused_kwargs):
 
@@ -18,7 +18,7 @@ def load(config, **unused_kwargs):
     else:
         raise NotImplementedError(f"Group {config.group} is not implemented.")
 
-    torch.manual_seed(0)  # TODO: initialization seed
+    torch.manual_seed(config.model_seed)  # TODO: initialization seed
     network = HLieResNet(
         sys_dim=config.sys_dim,
         d=config.space_dim,
@@ -27,6 +27,6 @@ def load(config, **unused_kwargs):
         num_layers=config.num_layers,
     )
 
-    dynamics_predictor = DynamicsPredictor(network)
+    dynamics_predictor = DynamicsPredictor(network, debug=config.debug)
 
     return dynamics_predictor, "HLieResNet_Dynamics"
