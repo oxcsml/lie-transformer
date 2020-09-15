@@ -32,7 +32,7 @@ class SumKernel(nn.Module):
 
         return self.location_kernel((None, pairwise_locations, mask))[
             1
-        ].squeeze() + self.feature_kernel(key_features, query_features, nbhd_idx)
+        ].squeeze(-1) + self.feature_kernel(key_features, query_features, nbhd_idx)
         # return self.feature_kernel(query_features, key_features, nbhd_idx)
 
 
@@ -182,6 +182,7 @@ class EquivairantMultiheadAttention(nn.Module):
         bn=False,
         mc_samples=0,
         fill=1.0,
+        attention_fn='softmax',
     ):
 
         super().__init__()
@@ -193,6 +194,10 @@ class EquivairantMultiheadAttention(nn.Module):
 
         self.mc_samples = mc_samples
         self.fill = fill
+
+        if not (attention_fn in ['softmax', 'dot_product']):
+            raise NotImplementedError(f'{attention_fn} not implemented.')
+        self.attention_fn = attention_fn
 
         if kernel_type == "mlp":
             self.kernel = SumKernel(
@@ -333,20 +338,41 @@ class EquivairantMultiheadAttention(nn.Module):
             nbhd_pairwise_g, nbhd_mask, coset_functions, coset_functions, nbhd_idx
         )
 
-        # Make masked areas very small attention weights
-        presoftmax_weights = torch.where(
-            # (bs, n * ns, nbhd_size) -> (bs, n * ns, nbhd_size, 1). Constant along head dim
-            nbhd_mask.unsqueeze(-1),
-            presoftmax_weights,
-            torch.tensor(
-                -1e38, dtype=presoftmax_weights.dtype, device=presoftmax_weights.device
+        if self.attention_fn == 'softmax':
+            # Make masked areas very small attention weights
+            presoftmax_weights = torch.where(
+                # (bs, n * ns, nbhd_size) -> (bs, n * ns, nbhd_size, 1). Constant along head dim
+                nbhd_mask.unsqueeze(-1),
+                presoftmax_weights,
+                torch.tensor(
+                    -1e38, dtype=presoftmax_weights.dtype, device=presoftmax_weights.device
+                )
+                * torch.ones_like(presoftmax_weights),
             )
-            * torch.ones_like(presoftmax_weights),
-        )
 
-        # Compute the normalised attention weights
-        # (bs, n * ns, nbhd_size, h) -> (bs, n * ns, nbhd_size, h)
-        softmax_attention = F.softmax(presoftmax_weights, dim=2)
+            # Compute the normalised attention weights
+            # (bs, n * ns, nbhd_size, h) -> (bs, n * ns, nbhd_size, h)       
+            attention_weights = F.softmax(presoftmax_weights, dim=2)
+        
+        # From the non-local attention paper
+        elif self.attention_fn == 'dot_product': 
+            attention_weights = torch.where(
+                # (bs, n * ns, nbhd_size) -> (bs, n * ns, nbhd_size, 1). Constant along head dim
+                nbhd_mask.unsqueeze(-1),
+                presoftmax_weights,
+                torch.tensor(
+                    0., dtype=presoftmax_weights.dtype, device=presoftmax_weights.device
+                )
+                * torch.ones_like(presoftmax_weights),
+            )
+
+            normalization = nbhd_mask.unsqueeze(-1).sum(-2, keepdim=True)
+            normalization = torch.clamp(normalization, min=1)
+
+            # Compute the normalised attention weights
+            # (bs, n * ns, nbhd_size, h) -> (bs, n * ns, nbhd_size, h)       
+            attention_weights = attention_weights / normalization
+
 
         # Pass the inputs through the value linear layer
         # (bs, n * ns, nbhd_size, c_in) -> (bs, n * ns, nbhd_size, c_out)
@@ -359,8 +385,8 @@ class EquivairantMultiheadAttention(nn.Module):
 
         # Sum over the coefficients
         # TODO: Currently allows self interaction in the attention sum. Some pre matrices?
-        # (bs, n * ns, nbhd_size, h), (bs, n * ns, nbhd_size, h, c_out / h) -> (bs, n * ns, nbhd_size, h, c_out / h)
-        coset_functions = (softmax_attention.unsqueeze(-1) * nbhd_coset_functions).sum(
+        # (bs, n * ns, nbhd_size, h), (bs, n * ns, nbhd_size, h, c_out / h) -> (bs, n * ns, nbhd_size, h)
+        coset_functions = (attention_weights.unsqueeze(-1) * nbhd_coset_functions).sum(
             dim=2
         )
 
@@ -386,6 +412,7 @@ class EquivariantTransformerBlock(nn.Module):
         hidden_dim_factor=1,
         mc_samples=0,
         fill=1.0,
+        attention_fn='softmax',
     ):
         super().__init__()
         self.ema = EquivairantMultiheadAttention(
@@ -399,6 +426,7 @@ class EquivariantTransformerBlock(nn.Module):
             bn=kernel_norm == "batch",
             mc_samples=mc_samples,
             fill=fill,
+            attention_fn=attention_fn,
         )
         # TODO: temp bigger inner dim as per Attention is All You Need
         self.mlp = nn.Sequential(
@@ -533,6 +561,7 @@ class EquivariantTransformer(nn.Module):
         mc_samples=0,
         fill=1.0,
         architecture="model_1",
+        attention_fn='softmax', # softmax or dot product? SZ: TODO: "dot product" is used to describe both the attention weights being non-softmax (non-local attention paper) and the feature kernel. should fix terminology
     ):
         super().__init__()
 
@@ -553,6 +582,7 @@ class EquivariantTransformer(nn.Module):
             kernel_act=kernel_act,
             mc_samples=mc_samples,
             fill=fill,
+            attention_fn=attention_fn,
         )
 
         if architecture == "model_1":
