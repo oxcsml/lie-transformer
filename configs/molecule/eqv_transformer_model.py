@@ -29,7 +29,7 @@ flags.DEFINE_string(
     "Type of norm to use in the attention block. none/[layer/batch]_[pre/post]",
 )
 flags.DEFINE_string(
-    "block_norm",
+    "output_norm",
     "none",
     "Type of norm to use in the final MLP layers block. none/layer/batch",
 )
@@ -131,4 +131,7 @@ def load(config, **unused_kwargs):
 
     molecule_predictor = MoleculePredictor(predictor, config.task, config.ds_stats)
 
-    return molecule_predictor, f"MoleculeEquivariantTransformer_{config.group}"
+    return (
+        molecule_predictor,
+        f"MoleculeEquivariantTransformer_{config.group}_{config.architecture}",
+    )

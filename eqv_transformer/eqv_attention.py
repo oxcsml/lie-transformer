@@ -641,7 +641,7 @@ class EquivariantTransformer(nn.Module):
                     for i in range(num_layers)
                 ],
                 norm,
-                Pass(Swish() if act == "swish" else nn.ReLU(), dim=1),
+                Pass(Swish() if kernel_act == "swish" else nn.ReLU(), dim=1),
                 Pass(nn.Linear(dim_hidden[-1], dim_output), dim=1),
                 GlobalPool(mean=global_pool_mean)
                 if global_pool

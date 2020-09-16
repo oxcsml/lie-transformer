@@ -42,11 +42,12 @@ class MultiheadLinear(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self):
-        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        for i in range(self.n_heads):
+            nn.init.kaiming_uniform_(self.weight[i], a=math.sqrt(5))
         if self.bias is not None:
-            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
+                fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight[i])
             bound = 1 / math.sqrt(fan_in)
-            nn.init.uniform_(self.bias, -bound, bound)
+                nn.init.uniform_(self.bias[i], -bound, bound)
 
     def forward(self, input):
         # Uses einsum notation to get the correct output
