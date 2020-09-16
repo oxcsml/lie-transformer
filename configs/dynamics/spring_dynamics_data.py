@@ -1,5 +1,6 @@
 import os
 
+import torch
 from torch.utils.data import DataLoader
 from oil.utils.utils import FixedNumpySeed, islice
 from oil.datasetup.datasets import split_dataset
@@ -22,7 +23,7 @@ flags.DEFINE_integer(
     "sys_dim", 2, "[add description]."
 )  # TODO: SZ: find where this is used. Hard code?
 flags.DEFINE_integer("space_dim", 2, "[add description].")  # TODO
-flags.DEFINE_integer("data_seed", 0, "[add description].")  # TODO
+flags.DEFINE_integer("data_seed", 0, "Data splits random seed.")  
 
 # ####
 # from types import SimpleNamespace
@@ -34,8 +35,10 @@ flags.DEFINE_integer("data_seed", 0, "[add description].")  # TODO
 #     'n_systems': 10000,
 #     'data_path': './datasets/ODEDynamics/SpringDynamics/',
 #     'sys_dim': 2,
+#     'space_dim': 2,
 #     'data_seed': 1,
-#     'batch_size': 200
+#     'batch_size': 200,
+#     'device': 3
 # })
 
 
@@ -56,6 +59,14 @@ def load(config):
     with FixedNumpySeed(config.data_seed):
         datasets = split_dataset(dataset, splits)
 
+    # if torch.cuda.is_available():
+    #     device = f"cuda:{config.device}"
+    # else:
+    #     device = "cpu"
+
+    # for v in datasets.values():
+    #     v.tensors_to(device)
+
     dataloaders = {
         k: DataLoader(
             v,
@@ -69,4 +80,7 @@ def load(config):
     # TODO: is this used anywhere?
     dataloaders["Train"] = islice(dataloaders["train"], len(dataloaders["val"]))
 
-    return dataloaders, f'spring_dyanmics_data'
+    return dataloaders, f'spring_dynamics'
+
+
+# data = load(config)
