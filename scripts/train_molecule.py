@@ -2,8 +2,11 @@ import sys
 from os import path as osp
 import time
 from math import sqrt
+from itertools import chain
+from functools import partial
 
 import torch
+import torch.nn as nn
 from torch import optim
 from torch.utils.tensorboard import SummaryWriter
 from oil.utils.utils import cosLr
@@ -24,9 +27,18 @@ from eqv_transformer.train_tools import (
     load_checkpoint,
     save_checkpoint,
     ExponentialMovingAverage,
+    get_component,
+    nested_to,
+    param_count,
+    get_component,
+    get_average_norm,
+    param_count,
 )
 
 from eqv_transformer.molecule_predictor import MoleculePredictor
+from eqv_transformer.multihead_neural import MultiheadLinear
+from lie_conv.utils import Pass, Expression
+from lie_conv.masked_batchnorm import MaskBatchNormNd
 
 
 if torch.cuda.is_available():
@@ -85,6 +97,12 @@ flags.DEFINE_string(
 flags.DEFINE_boolean(
     "parameter_count", False, "If True, print model parameter count and exit"
 )
+flags.DEFINE_boolean("debug", False, "Enable additional telemetry for debugging")
+flags.DEFINE_boolean(
+    "init_activations",
+    False,
+    "produce initialisation activation histograms the activations of specified modules through training",
+)
 
 
 #####################################################################################################################
@@ -108,14 +126,24 @@ def main():
     model, model_name = fet.load(config.model_config, config)
     model.to(device)
 
+    num_params = param_count(model)
     if config.parameter_count:
         print(model)
         print("============================================================")
-        print(
-            f"{model_name} parameters: {sum(p.numel() for p in model.parameters()):.5e}"
-        )
+        print(f"{model_name} parameters: {num_params:.5e}")
+        print("============================================================")
+        # from torchsummary import summary
+        # print(
+        #     summary(
+        #         model.predictor,
+        #         [(30, 3), (30, 15), (30,)],
+        #         batch_size=config.batch_size,
+        #     )
+        # )
         # fet.print_flags()
         sys.exit(0)
+    else:
+        print(f"{model_name} parameters: {num_params:.5e}")
 
     config.charge_scale = float(config.charge_scale.numpy())
     config.ds_stats = [float(stat.numpy()) for stat in config.ds_stats]
@@ -135,11 +163,11 @@ def main():
     if config.lr_schedule != "none":
         run_name += "_" + config.lr_schedule
 
-    if config.block_norm != "none":
-        run_name += "_" + config.block_norm
+    # if config.block_norm != "none":
+    #     run_name += "_" + config.block_norm
 
-    if config.kernel_norm != "none":
-        run_name += "_" + config.kernel_norm
+    # if config.kernel_norm != "none":
+    #     run_name += "_" + config.kernel_norm
 
     results_folder_name = osp.join(data_name, model_name, run_name,)
 
@@ -203,6 +231,75 @@ def main():
     save_checkpoint(checkpoint_name, 0, model, model_opt, lr_schedule, 0.0)
     print("finished saving model at epoch 0 before training")
 
+    if (
+        config.debug
+        and config.model_config == "configs/dynamics/eqv_transformer_model.py"
+    ):
+        model_components = (
+            [(0, [], "embedding_layer")]
+            + list(
+                chain.from_iterable(
+                    (
+                        (k, [], f"ema_{k}"),
+                        (
+                            k,
+                            ["ema", "kernel", "location_kernel"],
+                            f"ema_{k}_location_kernel",
+                        ),
+                        (
+                            k,
+                            ["ema", "kernel", "feature_kernel"],
+                            f"ema_{k}_feature_kernel",
+                        ),
+                    )
+                    for k in range(1, config.num_layers + 1)
+                )
+            )
+            + [(config.num_layers + 2, [], "output_mlp")]
+        )  # components to track for debugging
+        grad_flows = []
+
+    if config.init_activations:
+        activation_tracked = [
+            (name, module)
+            for name, module in model.named_modules()
+            if isinstance(module, Expression)
+            | isinstance(module, nn.Linear)
+            | isinstance(module, MultiheadLinear)
+            | isinstance(module, MaskBatchNormNd)
+        ]
+        activations = {}
+
+        def save_activation(name, mod, inpt, otpt):
+            # print(name)
+            # print(len(inpt))
+            # print(len(otpt))
+
+            if isinstance(inpt, tuple):
+                if isinstance(inpt[0], list):
+                    activations[name + "_inpt"] = inpt[0][1].detach().cpu()
+                else:
+                    if len(inpt) == 1:
+                        activations[name + "_inpt"] = inpt[0].detach().cpu()
+                    else:
+                        activations[name + "_inpt"] = inpt[1].detach().cpu()
+            else:
+                activations[name + "_inpt"] = inpt.detach().cpu()
+
+            if isinstance(otpt, tuple):
+                if isinstance(otpt[0], list):
+                    activations[name + "_otpt"] = otpt[0][1].detach().cpu()
+                else:
+                    if len(otpt) == 1:
+                        activations[name + "_otpt"] = otpt[0].detach().cpu()
+                    else:
+                        activations[name + "_otpt"] = otpt[1].detach().cpu()
+            else:
+                activations[name + "_otpt"] = otpt.detach().cpu()
+
+        for name, tracked_module in activation_tracked:
+            tracked_module.register_forward_hook(partial(save_activation, name))
+
     # Training
     start_t = time.perf_counter()
     if config.log_train_values:
@@ -219,6 +316,15 @@ def main():
             outputs = model(data, compute_loss=True)
             outputs.loss.backward()
             model_opt.step()
+
+            if config.init_activations:
+                for name, activation in activations.items():
+                    print(name)
+                    summary_writer.add_histogram(
+                        f"activations/{name}", activation.numpy(), 0
+                    )
+
+                sys.exit(0)
 
             if config.log_train_values:
                 reports = parse_reports(outputs.reports)
@@ -263,6 +369,85 @@ def main():
 
             # Step the LR schedule
             lr_schedule.step(train_iter / iters_per_epoch)
+
+            # Track stuff for debugging
+            if config.debug:
+                model.eval()
+                with torch.no_grad():
+                    curr_params = {
+                        k: v.detach().clone() for k, v in model.state_dict().items()
+                    }
+
+                    # updates norm
+                    if train_iter == 1:
+                        update_norm = 0
+                    else:
+                        update_norms = []
+                        for (k_prev, v_prev), (k_curr, v_curr) in zip(
+                            prev_params.items(), curr_params.items()
+                        ):
+                            assert k_prev == k_curr
+                            if (
+                                "tracked" not in k_prev
+                            ):  # ignore batch norm tracking. TODO: should this be ignored? if not, fix!
+                                update_norms.append((v_curr - v_prev).norm(1).item())
+                        update_norm = sum(update_norms)
+
+                    # gradient norm
+                    grad_norm = 0
+                    for p in model.parameters():
+                        try:
+                            grad_norm += p.grad.norm(1)
+                        except AttributeError:
+                            pass
+
+                    # weights norm
+                    if (
+                        config.model_config
+                        == "configs/dynamics/eqv_transformer_model.py"
+                    ):
+                        model_norms = {}
+                        for comp_name in model_components:
+                            comp = get_component(model.predictor.net, comp_name)
+                            norm = get_average_norm(comp)
+                            model_norms[comp_name[2]] = norm
+
+                        log_tensorboard(
+                            summary_writer,
+                            train_iter,
+                            model_norms,
+                            "debug/avg_model_norms/",
+                        )
+
+                    log_tensorboard(
+                        summary_writer,
+                        train_iter,
+                        {
+                            "avg_update_norm1": update_norm / num_params,
+                            "avg_grad_norm1": grad_norm / num_params,
+                        },
+                        "debug/",
+                    )
+                    prev_params = curr_params
+
+                    # gradient flow
+                    ave_grads = []
+                    max_grads = []
+                    layers = []
+                    for n, p in model.named_parameters():
+                        if (p.requires_grad) and ("bias" not in n):
+                            layers.append(n)
+                            ave_grads.append(p.grad.abs().mean().item())
+                            max_grads.append(p.grad.abs().max().item())
+
+                    grad_flow = {
+                        "layers": layers,
+                        "ave_grads": ave_grads,
+                        "max_grads": max_grads,
+                    }
+                    grad_flows.append(grad_flow)
+
+                model.train()
 
         # Test model at end of batch
         with torch.no_grad():
