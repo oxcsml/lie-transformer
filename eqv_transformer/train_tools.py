@@ -35,7 +35,10 @@ def parse_reports(report_dict):
 
 
 def parse_reports_cpu(report_dict):
-    return {k: v.item() if len(v.shape) == 0 else v.clone().cpu().numpy() for k, v in report_dict.items()}
+    return {
+        k: v.item() if len(v.shape) == 0 else v.clone().cpu().numpy()
+        for k, v in report_dict.items()
+    }
 
 
 def print_reports(report_dict, start_time, epoch, batch_idx, num_epochs, prefix=""):
@@ -166,6 +169,7 @@ class ExponentialMovingAverage(nn.Module):
 
         return ema
 
+
 def nested_to(x, device, dtype):
     """ Move a list of list of... of tensors to device"""
     try:
@@ -175,6 +179,7 @@ def nested_to(x, device, dtype):
         assert isinstance(x, (list, tuple))
         x = type(x)(nested_to(xx, device=device, dtype=dtype) for xx in x)
         return x
+
 
 def param_count(model):
     total_params = sum(p.numel() for p in model.parameters())
@@ -189,11 +194,10 @@ def get_component(module, description):
     for attr in attrs:
         module = getattr(module, attr)
     return module
-    
+
+
 def get_average_norm(module, p=1):
     norm = 0
     for param in module.parameters():
         norm += param.norm(p)
     return norm / param_count(module)
-    
-    

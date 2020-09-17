@@ -1,4 +1,5 @@
 import math
+from collections import OrderedDict
 
 import torch
 from torch import nn
@@ -44,9 +45,9 @@ class MultiheadLinear(nn.Module):
     def reset_parameters(self):
         for i in range(self.n_heads):
             nn.init.kaiming_uniform_(self.weight[i], a=math.sqrt(5))
-        if self.bias is not None:
+            if self.bias is not None:
                 fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight[i])
-            bound = 1 / math.sqrt(fan_in)
+                bound = 1 / math.sqrt(fan_in)
                 nn.init.uniform_(self.bias[i], -bound, bound)
 
     def forward(self, input):
@@ -62,16 +63,39 @@ def MultiheadLinearBNact(c_in, c_out, n_heads, act="swish", bn=True):
     assert act in ("relu", "swish"), f"unknown activation type {act}"
     normlayer = MaskBatchNormNd(c_out)
     return nn.Sequential(
-        Pass(MultiheadLinear(n_heads, c_in, c_out), dim=1),
-        normlayer if bn else nn.Sequential(),
-        Pass(Swish() if act == "swish" else nn.ReLU(), dim=1),
+        OrderedDict(
+            [
+                ("linear", Pass(MultiheadLinear(n_heads, c_in, c_out), dim=1)),
+                ("norm", normlayer if bn else nn.Sequential()),
+                ("activation", Pass(Swish() if act == "swish" else nn.ReLU(), dim=1)),
+            ]
+        )
     )
 
 
 def MultiheadWeightNet(in_dim, out_dim, n_heads, act, bn, hid_dim=32):
+    # TODO: Check speed difference
+    # return nn.Sequential(
+    #     *MultiheadLinearBNact(in_dim, hid_dim, n_heads, act, bn),
+    #     *MultiheadLinearBNact(hid_dim, hid_dim, n_heads, act, bn),
+    #     *MultiheadLinearBNact(hid_dim, out_dim, n_heads, act, bn),
+    # )
     return nn.Sequential(
-        *MultiheadLinearBNact(in_dim, hid_dim, n_heads, act, bn),
-        *MultiheadLinearBNact(hid_dim, hid_dim, n_heads, act, bn),
-        *MultiheadLinearBNact(hid_dim, out_dim, n_heads, act, bn),
+        OrderedDict(
+            [
+                (
+                    "LinNormAct_1",
+                    MultiheadLinearBNact(in_dim, hid_dim, n_heads, act, bn),
+                ),
+                (
+                    "LinNormAct_2",
+                    MultiheadLinearBNact(hid_dim, hid_dim, n_heads, act, bn),
+                ),
+                (
+                    "LinNormAct_3",
+                    MultiheadLinearBNact(hid_dim, out_dim, n_heads, act, bn),
+                ),
+            ]
+        )
     )
 

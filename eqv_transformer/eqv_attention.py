@@ -1,4 +1,5 @@
 import math
+from collections import OrderedDict
 
 import torch
 import torch.nn as nn
@@ -11,6 +12,37 @@ from lie_conv.lieConv import Swish
 from lie_conv.utils import Pass, Expression
 from lie_conv.masked_batchnorm import MaskBatchNormNd
 from eqv_transformer.multihead_neural import MultiheadWeightNet
+
+
+def LinearBNact(chin, chout, act="swish", bn=True):
+    """assumes that the inputs to the net are shape (bs,n,mc_samples,c)"""
+    assert act in ("relu", "swish"), f"unknown activation type {act}"
+    normlayer = MaskBatchNormNd(chout)
+    return nn.Sequential(
+        OrderedDict(
+            [
+                ("linear", Pass(nn.Linear(chin, chout), dim=1)),
+                ("norm", normlayer if bn else nn.Sequential()),
+                ("activation", Pass(Swish() if act == "swish" else nn.ReLU(), dim=1)),
+            ]
+        )
+    )
+
+
+def MLP(dim_in, dim_hid, dim_out, num_layers, act, bn):
+    if num_layers == 1:
+        return nn.Sequential(
+            OrderedDict([("LinNormAct_1", LinearBNact(dim_in, dim_out, act, bn))])
+        )
+    else:
+        layers = []
+        layers.append(("LinNormAct_1", LinearBNact(dim_in, dim_hid, act, bn)))
+        for i in range(1, num_layers):
+            layers.append((f"LinNormAct_{i+1}", LinearBNact(dim_hid, dim_hid, act, bn)))
+        layers.append(
+            (f"LinNormAct_{num_layers}", LinearBNact(dim_hid, dim_out, act, bn))
+        )
+        return nn.Sequential(OrderedDict(layers))
 
 
 class SumKernel(nn.Module):
@@ -30,9 +62,9 @@ class SumKernel(nn.Module):
         # Exapand the mask along the head dim
         mask = mask.unsqueeze(-1)
 
-        return self.location_kernel((None, pairwise_locations, mask))[
-            1
-        ].squeeze(-1) + self.feature_kernel(key_features, query_features, nbhd_idx)
+        return self.location_kernel((None, pairwise_locations, mask))[1].squeeze(
+            -1
+        ) + self.feature_kernel(key_features, query_features, nbhd_idx)
         # return self.feature_kernel(query_features, key_features, nbhd_idx)
 
 
@@ -169,6 +201,10 @@ class RelativePositionKernel(nn.Module):
         return rearrange(A_, "(b h) n m -> b n m h", h=self.n_heads)
 
 
+# class ResidualBlock(nn.Module):
+#     def __init__(self, )
+
+
 class EquivairantMultiheadAttention(nn.Module):
     def __init__(
         self,
@@ -182,7 +218,7 @@ class EquivairantMultiheadAttention(nn.Module):
         bn=False,
         mc_samples=0,
         fill=1.0,
-        attention_fn='softmax',
+        attention_fn="softmax",
     ):
 
         super().__init__()
@@ -195,8 +231,8 @@ class EquivairantMultiheadAttention(nn.Module):
         self.mc_samples = mc_samples
         self.fill = fill
 
-        if not (attention_fn in ['softmax', 'dot_product']):
-            raise NotImplementedError(f'{attention_fn} not implemented.')
+        if not (attention_fn in ["softmax", "dot_product"]):
+            raise NotImplementedError(f"{attention_fn} not implemented.")
         self.attention_fn = attention_fn
 
         if kernel_type == "mlp":
@@ -338,30 +374,34 @@ class EquivairantMultiheadAttention(nn.Module):
             nbhd_pairwise_g, nbhd_mask, coset_functions, coset_functions, nbhd_idx
         )
 
-        if self.attention_fn == 'softmax':
+        if self.attention_fn == "softmax":
             # Make masked areas very small attention weights
             presoftmax_weights = torch.where(
                 # (bs, n * ns, nbhd_size) -> (bs, n * ns, nbhd_size, 1). Constant along head dim
                 nbhd_mask.unsqueeze(-1),
                 presoftmax_weights,
                 torch.tensor(
-                    -1e38, dtype=presoftmax_weights.dtype, device=presoftmax_weights.device
+                    -1e38,
+                    dtype=presoftmax_weights.dtype,
+                    device=presoftmax_weights.device,
                 )
                 * torch.ones_like(presoftmax_weights),
             )
 
             # Compute the normalised attention weights
-            # (bs, n * ns, nbhd_size, h) -> (bs, n * ns, nbhd_size, h)       
+            # (bs, n * ns, nbhd_size, h) -> (bs, n * ns, nbhd_size, h)
             attention_weights = F.softmax(presoftmax_weights, dim=2)
-        
+
         # From the non-local attention paper
-        elif self.attention_fn == 'dot_product': 
+        elif self.attention_fn == "dot_product":
             attention_weights = torch.where(
                 # (bs, n * ns, nbhd_size) -> (bs, n * ns, nbhd_size, 1). Constant along head dim
                 nbhd_mask.unsqueeze(-1),
                 presoftmax_weights,
                 torch.tensor(
-                    0., dtype=presoftmax_weights.dtype, device=presoftmax_weights.device
+                    0.0,
+                    dtype=presoftmax_weights.dtype,
+                    device=presoftmax_weights.device,
                 )
                 * torch.ones_like(presoftmax_weights),
             )
@@ -370,9 +410,8 @@ class EquivairantMultiheadAttention(nn.Module):
             normalization = torch.clamp(normalization, min=1)
 
             # Compute the normalised attention weights
-            # (bs, n * ns, nbhd_size, h) -> (bs, n * ns, nbhd_size, h)       
+            # (bs, n * ns, nbhd_size, h) -> (bs, n * ns, nbhd_size, h)
             attention_weights = attention_weights / normalization
-
 
         # Pass the inputs through the value linear layer
         # (bs, n * ns, nbhd_size, c_in) -> (bs, n * ns, nbhd_size, c_out)
@@ -412,7 +451,7 @@ class EquivariantTransformerBlock(nn.Module):
         hidden_dim_factor=1,
         mc_samples=0,
         fill=1.0,
-        attention_fn='softmax',
+        attention_fn="softmax",
     ):
         super().__init__()
         self.ema = EquivairantMultiheadAttention(
@@ -428,71 +467,50 @@ class EquivariantTransformerBlock(nn.Module):
             fill=fill,
             attention_fn=attention_fn,
         )
-        # TODO: temp bigger inner dim as per Attention is All You Need
-        self.mlp = nn.Sequential(
-            nn.Linear(dim, int(hidden_dim_factor * dim)),
-            Swish(),
-            nn.Linear(int(hidden_dim_factor * dim), dim),
-        )
+
+        self.mlp = MLP(dim, dim, dim, 2, kernel_act, kernel_norm == "batch")
 
         if block_norm == "none":
-            self.attention_function = (
-                lambda pairwise_g, coset_functions, mask: coset_functions
-                + self.ema((pairwise_g, coset_functions, mask))[1]
-            )
-            self.mlp_function = lambda coset_functions: coset_functions + self.mlp(
-                coset_functions
-            )
+            self.attention_function = lambda inpt: inpt[1] + self.ema(inpt)[1]
+            self.mlp_function = lambda inpt: inpt[1] + self.mlp(inpt)
         elif block_norm == "layer_pre":
             self.ln_ema = nn.LayerNorm(dim)
             self.ln_mlp = nn.LayerNorm(dim)
 
             self.attention_function = (
-                lambda pairwise_g, coset_functions, mask: coset_functions
-                + self.ema((pairwise_g, self.ln_ema(coset_functions), mask))[1]
+                lambda inpt: inpt[1]
+                + self.ema((inpt[0], self.ln_ema(inpt[1]), inpt[2]))[1]
             )
-            self.mlp_function = lambda coset_functions: coset_functions + self.mlp(
-                self.ln_mlp(coset_functions)
+            self.mlp_function = (
+                lambda inpt: inpt[1]
+                + self.mlp((inpt[0], self.ln_mlp(inpt[1]), inpt[2]))[1]
             )
         elif block_norm == "layer_post":
             self.ln_ema = nn.LayerNorm(dim)
             self.ln_mlp = nn.LayerNorm(dim)
 
-            self.attention_function = (
-                lambda pairwise_g, coset_functions, mask: coset_functions
-                + self.ln_ema(self.ema((pairwise_g, coset_functions, mask))[1])
+            self.attention_function = lambda inpt: inpt[1] + self.ln_ema(
+                self.ema(inpt)[1]
             )
-            self.mlp_function = lambda coset_functions: coset_functions + self.ln_mlp(
-                self.mlp(coset_functions)
-            )
+            self.mlp_function = lambda inpt: inpt[1] + self.ln_mlp(self.mlp(inpt)[1])
         elif block_norm == "batch_pre":
             self.bn_ema = MaskBatchNormNd(dim)
             self.bn_mlp = MaskBatchNormNd(dim)
 
             self.attention_function = (
-                lambda pairwise_g, coset_functions, mask: coset_functions
-                + self.ema((pairwise_g, self.bn_ema(coset_functions), mask))[1]
+                lambda inpt: inpt[1] + self.ema(self.bn_ema(inpt))[1]
             )
-            self.mlp_function = lambda coset_functions: coset_functions + self.mlp(
-                self.bn_mlp(coset_functions)
-            )
+            self.mlp_function = lambda inpt: inpt[1] + self.mlp(self.bn_mlp(inpt[1]))[1]
         elif block_norm == "batch_post":
             self.bn_ema = MaskBatchNormNd(dim)
             self.bn_mlp = MaskBatchNormNd(dim)
 
-            self.attention_function = (
-                lambda pairwise_g, coset_functions, mask: coset_functions
-                + self.bn_ema(self.ema((pairwise_g, coset_functions, mask))[1])
-            )
-            self.mlp_function = lambda coset_functions: coset_functions + self.bn_mlp(
-                self.mlp(coset_functions)
-            )
+            self.attention_function = lambda inpt: inpt[1] + self.bn_ema(self.ema(inpt))
+            self.mlp_function = lambda inpt: inpt[1] + self.bn_mlp(self.mlp(inpt))[1]
         else:
             raise ValueError(f"{block_norm} is invalid block norm type")
 
-    def forward(self, lifted_data):
-        pairwise_g, coset_functions, mask = lifted_data
-
+    def forward(self, inpt):
         # # optional layer norm
         # if getattr(self, "ln_ema", None) is not None:
         #     # equivariant attention with residual connection
@@ -511,10 +529,10 @@ class EquivariantTransformerBlock(nn.Module):
         # else:
         #     coset_functions = coset_functions + self.mlp(coset_functions)
 
-        coset_functions = self.attention_function(pairwise_g, coset_functions, mask)
-        coset_functions = self.mlp_function(coset_functions)
+        inpt[1] = self.attention_function(inpt)
+        inpt[1] = self.mlp_function(inpt)
 
-        return (pairwise_g, coset_functions, mask)
+        return inpt
 
 
 class GlobalPool(nn.Module):
@@ -561,7 +579,7 @@ class EquivariantTransformer(nn.Module):
         mc_samples=0,
         fill=1.0,
         architecture="model_1",
-        attention_fn='softmax', # softmax or dot product? SZ: TODO: "dot product" is used to describe both the attention weights being non-softmax (non-local attention paper) and the feature kernel. should fix terminology
+        attention_fn="softmax",  # softmax or dot product? SZ: TODO: "dot product" is used to describe both the attention weights being non-softmax (non-local attention paper) and the feature kernel. should fix terminology
     ):
         super().__init__()
 
@@ -625,10 +643,6 @@ class EquivariantTransformer(nn.Module):
         elif architecture == "lieconv":
             if output_norm == "batch":
                 norm = nn.BatchNorm1d(dim_hidden[-1])
-            # elif output_norm == "linear":
-            #     norm1 = nn.LayerNorm()
-            #     norm2 = nn.LayerNorm()
-            #     norm3 = nn.LayerNorm()
             elif output_norm == "none":
                 norm = nn.Sequential()
             else:
@@ -640,9 +654,24 @@ class EquivariantTransformer(nn.Module):
                     attention_block(dim_hidden[i], num_heads[i])
                     for i in range(num_layers)
                 ],
-                norm,
-                Pass(Swish() if kernel_act == "swish" else nn.ReLU(), dim=1),
-                Pass(nn.Linear(dim_hidden[-1], dim_output), dim=1),
+                nn.Sequential(
+                    OrderedDict(
+                        [
+                            # ("norm", Pass(norm, dim=1)),
+                            (
+                                "activation",
+                                Pass(
+                                    Swish() if kernel_act == "swish" else nn.ReLU(),
+                                    dim=1,
+                                ),
+                            ),
+                            (
+                                "linear",
+                                Pass(nn.Linear(dim_hidden[-1], dim_output), dim=1),
+                            ),
+                        ]
+                    )
+                ),
                 GlobalPool(mean=global_pool_mean)
                 if global_pool
                 else Expression(lambda x: x[1]),
