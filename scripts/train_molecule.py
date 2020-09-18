@@ -103,7 +103,7 @@ flags.DEFINE_boolean(
     False,
     "produce initialisation activation histograms the activations of specified modules through training",
 )
-
+flags.DEFINE_boolean("profile_model", False, "Run profiling code on model and exit")
 
 #####################################################################################################################
 
@@ -221,6 +221,25 @@ def main():
     ) + 1
 
     print("Starting training at epoch = {}, iter = {}".format(start_epoch, train_iter))
+
+    # Do model profiling if desired
+    if config.profile_model:
+        import torch.autograd.profiler as profiler
+
+        # model.to("cpu")
+
+        data = next(iter(dataloaders["train"]))
+
+        data = {k: v.to(device) for k, v in data.items()}
+
+        with profiler.profile(profile_memory=True, record_shapes=True) as prof:
+            with profiler.record_function("model_inference"):
+                outputs = model(data, compute_loss=True)
+
+        print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
+        print(prof.key_averages().table(sort_by="self_cpu_memory_usage", row_limit=10))
+
+        sys.exit(0)
 
     # Setup tensorboard writing
     summary_writer = SummaryWriter(logdir)
