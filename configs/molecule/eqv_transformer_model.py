@@ -59,6 +59,9 @@ flags.DEFINE_integer("model_seed", 0, "Model rng seed")
 flags.DEFINE_string(
     "architecture", "model_1", "The model architecture to use. model_1/lieconv"
 )
+flags.DEFINE_string(
+    "attention_fn", "softmax", "Type of attention function to use. softmax/dot_product"
+)
 
 
 class MoleculeEquivariantTransformer(EquivariantTransformer):
@@ -86,6 +89,7 @@ class MoleculeEquivariantTransformer(EquivariantTransformer):
     def forward(self, mb):
         with torch.no_grad():
             x = self.featurize(mb)
+            # x = mb
             x = self.random_rotate(x) if self.aug else x
         return super().forward(x).squeeze(-1)
 
@@ -124,6 +128,7 @@ def load(config, **unused_kwargs):
         kernel_act=config.activation_function,
         fill=config.fill,
         mc_samples=config.mc_samples,
+        attention_fn=config.attention_fn,
     )
 
     # predictor.net[-1][-1].weight.data = predictor.net[-1][-1].weight * (0.205 / 0.005)
