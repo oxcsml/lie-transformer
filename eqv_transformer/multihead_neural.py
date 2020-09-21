@@ -99,3 +99,35 @@ def MultiheadWeightNet(in_dim, out_dim, n_heads, act, bn, hid_dim=32):
         )
     )
 
+
+def MultiheadMLP(in_dim, hid_dim, out_dim, n_heads, n_layers, act, bn):
+    if n_layers == 1:
+        return nn.Sequential(
+            OrderedDict(
+                [
+                    (
+                        "LinNormAct_1",
+                        MultiheadLinearBNact(in_dim, out_dim, n_heads, act, bn),
+                    )
+                ]
+            )
+        )
+    else:
+        layers = []
+        layers.append(
+            ("LinNormAct_1", MultiheadLinearBNact(in_dim, hid_dim, n_heads, act, bn))
+        )
+        for i in range(1, n_layers):
+            layers.append(
+                (
+                    f"LinNormAct_{i+1}",
+                    MultiheadLinearBNact(hid_dim, hid_dim, n_heads, act, bn),
+                )
+            )
+        layers.append(
+            (
+                f"LinNormAct_{n_layers}",
+                MultiheadLinearBNact(hid_dim, out_dim, n_heads, act, bn),
+            )
+        )
+        return nn.Sequential(OrderedDict(layers))
