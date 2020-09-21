@@ -11,7 +11,9 @@ from lie_conv.lieGroups import SE3
 from lie_conv.lieConv import Swish
 from lie_conv.utils import Pass, Expression
 from lie_conv.masked_batchnorm import MaskBatchNormNd
-from eqv_transformer.multihead_neural import MultiheadWeightNet
+from eqv_transformer.multihead_neural import MultiheadWeightNet, MultiheadMLP
+
+1
 
 
 def LinearBNact(chin, chout, act="swish", bn=True):
@@ -45,6 +47,117 @@ def MLP(dim_in, dim_hid, dim_out, num_layers, act, bn):
         return nn.Sequential(OrderedDict(layers))
 
 
+class AttentionKernel(nn.Module):
+    def __init__(
+        self,
+        feature_dim,
+        location_dim,
+        n_heads,
+        feature_featurisation="dot_product",
+        location_featurisation="mlp",
+        location_feature_combination="sum",
+        # normalisation="softmax",
+        hidden_dim=16,
+        activation="swish",
+    ):
+
+        super().__init__()
+
+        if feature_featurisation == "dot_product":
+            self.feature_featurisation = DotProductKernel(
+                feature_dim, feature_dim, feature_dim, n_heads
+            )
+            featurised_feature_dim = 1
+        elif feature_featurisation == "linear_concat":
+            self.feature_featurisation = LinearConcatEmbedding(
+                feature_dim, feature_dim, feature_dim, n_heads
+            )
+            featurised_feature_dim = 2 * int(feature_dim / n_heads)
+        elif feature_featurisation == "linear_concat_linear":
+            featurised_feature_dim = int(feature_dim / n_heads)
+            self.feature_featurisation = LinearConcatLinearEmbedding(
+                feature_dim, feature_dim, feature_dim, n_heads
+            )
+        else:
+            raise ValueError(
+                f"{feature_featurisation} is not a valid feature featurisation"
+            )
+
+        if location_featurisation == "mlp":
+            self.location_featurisation = nn.Sequential(
+                Expression(
+                    lambda x: (
+                        x[0],
+                        x[1].unsqueeze(-2).repeat(1, 1, 1, n_heads, 1),
+                        x[2],
+                    )
+                ),
+                MultiheadWeightNet(
+                    location_dim,
+                    1,
+                    n_heads,
+                    hid_dim=hidden_dim,
+                    act=activation,
+                    bn=False,
+                ),
+                Expression(lambda x: x[1].squeeze(-1)),
+            )
+            featurised_location_dim = 1
+        elif location_featurisation == "none":
+            self.location_featurisation = Expression(
+                lambda x: x[1].unsqueeze(-2).repeat(1, 1, 1, n_heads, 1)
+            )
+            featurised_location_dim = location_dim
+        else:
+            raise ValueError(
+                f"{location_featurisation} is not a valid location featurisation"
+            )
+
+        if location_feature_combination == "sum":
+            self.location_feature_combination = Expression(lambda x: x[0] + x[1])
+        elif location_feature_combination == "mlp":
+            self.location_feature_combination = nn.Sequential(
+                Expression(lambda x: (None, torch.cat(x, dim=-1), None)),
+                MultiheadMLP(
+                    featurised_feature_dim + featurised_location_dim,
+                    hidden_dim,
+                    1,
+                    n_heads,
+                    3,
+                    activation,
+                    False,
+                ),
+                Expression(lambda x: x[1].squeeze(-1)),
+            )
+        elif location_feature_combination == "multiply":
+            self.location_feature_combination = Expression(lambda x: x[0] * x[1])
+        else:
+            raise ValueError(
+                f"{location_feature_combination} is not a valid combination method"
+            )
+
+    def forward(
+        self, nbhd_pairwise_g, nbhd_mask, key_features, query_features, nbhd_idx
+    ):
+        feature_features = self.feature_featurisation(
+            key_features, query_features, nbhd_idx
+        )
+        location_features = self.location_featurisation(
+            (None, nbhd_pairwise_g, nbhd_mask)
+        )
+
+        if len(feature_features.shape) == 4:
+            feature_features = feature_features.unsqueeze(-1)
+        if len(location_features.shape) == 4:
+            location_features = location_features.unsqueeze(-1)
+
+        attention_weights = self.location_feature_combination(
+            [feature_features, location_features]
+        )
+
+        return attention_weights.squeeze()
+
+
 class SumKernel(nn.Module):
     def __init__(self, location_kernel, feature_kernel, n_heads):
         super().__init__()
@@ -66,6 +179,97 @@ class SumKernel(nn.Module):
             -1
         ) + self.feature_kernel(key_features, query_features, nbhd_idx)
         # return self.feature_kernel(query_features, key_features, nbhd_idx)
+
+
+class LinearConcatEmbedding(nn.Module):
+    def __init__(
+        self, embed_dim, k_dim, q_dim, n_heads, k_bias=True, q_bias=True,
+    ):
+        super().__init__()
+
+        self.n_heads = n_heads
+        self.embed_dim = embed_dim
+        self.head_dim = embed_dim // n_heads
+        assert (
+            self.head_dim * self.n_heads == self.embed_dim
+        ), "embed_dim must be divisible by n_heads"
+
+        self.k_dim = k_dim
+        self.q_dim = q_dim
+
+        self.fc_k = nn.Linear(k_dim, embed_dim, bias=k_bias)
+        self.fc_q = nn.Linear(q_dim, embed_dim, bias=q_bias)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.fc_k.reset_parameters()
+        self.fc_q.reset_parameters()
+
+    def forward(self, k, q, nbhd_idx):
+        # (bs, m, c_in) -> (bs, m, embed_dim) -> (bs * n_heads, m, h_dim)
+        K = rearrange(self.fc_k(k), "b n (h d) -> b n h d", h=self.n_heads)
+        # (bs, n, c_in) -> (bs, n, embed_dim) -> (bs * n_heads, n, h_dim)
+        Q = rearrange(self.fc_q(q), "b n (h d) -> b n h d", h=self.n_heads)
+        # Key features are just the same for each point
+        K = K.unsqueeze(2).repeat(1, 1, nbhd_idx.shape[2], 1, 1)
+        # Batch indices
+        B = (
+            torch.arange(Q.shape[0], device=Q.device)
+            .long()[:, None, None]
+            .expand(*nbhd_idx.shape)
+        )
+        # Extract the points for each nbhd
+        Q = Q[B, nbhd_idx]
+
+        # Concat and return
+        return torch.cat([K, Q], dim=-1)
+
+
+class LinearConcatLinearEmbedding(nn.Module):
+    def __init__(
+        self, embed_dim, k_dim, q_dim, n_heads, k_bias=True, q_bias=True,
+    ):
+        super().__init__()
+
+        self.n_heads = n_heads
+        self.embed_dim = embed_dim
+        self.head_dim = embed_dim // n_heads
+        assert (
+            self.head_dim * self.n_heads == self.embed_dim
+        ), "embed_dim must be divisible by n_heads"
+
+        self.k_dim = k_dim
+        self.q_dim = q_dim
+
+        self.fc_k = nn.Linear(k_dim, embed_dim, bias=k_bias)
+        self.fc_q = nn.Linear(q_dim, embed_dim, bias=q_bias)
+        self.fc_o = nn.Linear(2 * self.head_dim, self.head_dim)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.fc_k.reset_parameters()
+        self.fc_q.reset_parameters()
+
+    def forward(self, k, q, nbhd_idx):
+        # (bs, m, c_in) -> (bs, m, embed_dim) -> (bs * n_heads, m, h_dim)
+        K = rearrange(self.fc_k(k), "b n (h d) -> b n h d", h=self.n_heads)
+        # (bs, n, c_in) -> (bs, n, embed_dim) -> (bs * n_heads, n, h_dim)
+        Q = rearrange(self.fc_q(q), "b n (h d) -> b n h d", h=self.n_heads)
+        # Key features are just the same for each point
+        K = K.unsqueeze(2).repeat(1, 1, nbhd_idx.shape[2], 1, 1)
+        # Batch indices
+        B = (
+            torch.arange(Q.shape[0], device=Q.device)
+            .long()[:, None, None]
+            .expand(*nbhd_idx.shape)
+        )
+        # Extract the points for each nbhd
+        Q = Q[B, nbhd_idx]
+
+        # Concat and return
+        return self.fc_o(torch.cat([K, Q], dim=-1))
 
 
 class DotProductKernel(nn.Module):
@@ -201,8 +405,18 @@ class RelativePositionKernel(nn.Module):
         return rearrange(A_, "(b h) n m -> b n m h", h=self.n_heads)
 
 
-# class ResidualBlock(nn.Module):
-#     def __init__(self, )
+class ResidualBlock(nn.Module):
+    def __init__(self, module, dim=None):
+        super().__init__()
+        self.module = module
+        self.dim = dim
+
+    def forward(self, input):
+        if dim is None:
+            return input + self.module(input)
+        else:
+            input[dim] = self.module(input)[dim]
+            return input
 
 
 class EquivairantMultiheadAttention(nn.Module):
@@ -235,7 +449,38 @@ class EquivairantMultiheadAttention(nn.Module):
             raise NotImplementedError(f"{attention_fn} not implemented.")
         self.attention_fn = attention_fn
 
-        if kernel_type == "mlp":
+        if len(kernel_type) == 4:
+            normalisation = ["none", "softmax", "dot_product"]
+            self.attention_fn = normalisation[int(kernel_type[0])]
+
+            location_feature_combination = ["none", "sum", "mlp", "multiply"]
+            location_feature_combination = location_feature_combination[
+                int(kernel_type[1])
+            ]
+
+            feature_featurisation = [
+                "none",
+                "dot_product",
+                "linear_concat",
+                "linear_concat_linear",
+            ]
+            feature_featurisation = feature_featurisation[int(kernel_type[2])]
+
+            location_featurisation = ["none", "mlp", "none"]
+            location_featurisation = location_featurisation[int(kernel_type[3])]
+
+            self.kernel = AttentionKernel(
+                c_in,
+                group.lie_dim + 2 * group.q_dim,
+                n_heads,
+                feature_featurisation=feature_featurisation,
+                location_featurisation=location_featurisation,
+                location_feature_combination=location_feature_combination,
+                hidden_dim=kernel_dim,
+                activation=act,
+            )
+
+        elif kernel_type == "mlp":
             self.kernel = SumKernel(
                 MultiheadWeightNet(
                     group.lie_dim + 2 * group.q_dim,
@@ -273,7 +518,7 @@ class EquivairantMultiheadAttention(nn.Module):
                     act=act,
                     bn=bn,
                 ),
-                lambda x: torch.zeros(x[0].shape[:-1] + (n_heads,)),
+                lambda x1, x2, x3: 0,
                 n_heads,
             )
         else:
@@ -507,6 +752,45 @@ class EquivariantTransformerBlock(nn.Module):
 
             self.attention_function = lambda inpt: inpt[1] + self.bn_ema(self.ema(inpt))
             self.mlp_function = lambda inpt: inpt[1] + self.bn_mlp(self.mlp(inpt))[1]
+        elif block_norm == "DW":
+            self.mlp = nn.Sequential(
+                OrderedDict(
+                    [
+                        ("linear1", Pass(nn.Linear(dim, dim), dim=1)),
+                        ("norm1", Pass(nn.LayerNorm(dim), dim=1)),
+                        ("activation", Pass(Swish(), dim=1)),
+                        ("linear2", Pass(nn.Linear(dim, dim), dim=1)),
+                        ("norm2", Pass(nn.LayerNorm(dim), dim=1)),
+                    ]
+                )
+            )
+            self.atten = nn.Sequential(
+                OrderedDict(
+                    [
+                        ("norm1", Pass(nn.LayerNorm(dim), dim=1)),
+                        ("activation1", Pass(Swish(), dim=1)),
+                        ("attention", self.ema),
+                        ("norm2", Pass(nn.LayerNorm(dim), dim=1)),
+                        ("activation2", Pass(Swish(), dim=1)),
+                    ]
+                )
+            )
+            # TODO: Check this works - dereferencing might cause GC/Not the desired effect wrt module registration
+            self.ema = None
+
+            self.final = nn.Sequential(
+                OrderedDict(
+                    [
+                        ("norm", Pass(nn.LayerNorm(dim), dim=1)),
+                        ("activation", Pass(Swish(), dim=1)),
+                    ]
+                )
+            )
+
+            self.attention_function = lambda inpt: inpt[1] + self.atten(inpt)[1]
+            self.mlp_function = lambda inpt: self.final(
+                (inpt[0], inpt[1] + self.mlp(inpt)[1], inpt[2])
+            )[1]
         else:
             raise ValueError(f"{block_norm} is invalid block norm type")
 
@@ -675,6 +959,18 @@ class EquivariantTransformer(nn.Module):
                 GlobalPool(mean=global_pool_mean)
                 if global_pool
                 else Expression(lambda x: x[1]),
+            )
+        elif architecture == "DW":
+            self.net = nn.Sequential(
+                Pass(nn.Linear(dim_input, dim_hidden[0]), dim=1),
+                Pass(nn.LayerNorm(dim_hidden[0]), dim=1),
+                Pass(Swish(), dim=1),
+                *[
+                    attention_block(dim_hidden[i], num_heads[i])
+                    for i in range(num_layers)
+                ],
+                Pass(nn.Linear(dim_hidden[-1], dim_output), dim=1),
+                GlobalPool(mean=global_pool_mean),
             )
         else:
             raise ValueError(f"{architecture} is not a valid architecture")
