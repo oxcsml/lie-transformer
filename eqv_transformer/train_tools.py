@@ -201,3 +201,19 @@ def get_average_norm(module, p=1):
     for param in module.parameters():
         norm += param.norm(p)
     return norm / param_count(module)
+
+
+def parameter_analysis(model):
+    for n, p in model.named_parameters():
+        print(
+            "{:>100}   {:>20}Mb   {:>20}".format(
+                n, p.numel() * 4 / (1024 ** 2), p.type()
+            )
+        )
+    print(
+        "{:>100}   {:>20}Mb".format(
+            "total parameters",
+            sum(p.numel() for p in model.parameters()) * 4 / (1024 ** 2),
+        )
+    )
+

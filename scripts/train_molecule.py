@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 from torch import optim
 from torch.utils.tensorboard import SummaryWriter
-from oil.utils.utils import cosLr
+import transformers
 
 import forge
 from forge import flags
@@ -33,6 +33,7 @@ from eqv_transformer.train_tools import (
     get_component,
     get_average_norm,
     param_count,
+    parameter_analysis,
 )
 
 from eqv_transformer.molecule_predictor import MoleculePredictor
@@ -43,6 +44,7 @@ from lie_conv.masked_batchnorm import MaskBatchNormNd
 
 if torch.cuda.is_available():
     device = "cuda"
+    # device = "cpu"
 else:
     device = "cpu"
 
@@ -132,15 +134,13 @@ def main():
         print("============================================================")
         print(f"{model_name} parameters: {num_params:.5e}")
         print("============================================================")
-        # from torchsummary import summary
-        # print(
-        #     summary(
-        #         model.predictor,
-        #         [(30, 3), (30, 15), (30,)],
-        #         batch_size=config.batch_size,
-        #     )
-        # )
+        from torchsummary import summary
+
+        data = next(iter(dataloaders["train"]))
+        data = {k: v.to(device) for k, v in data.items()}
+        print(summary(model.predictor, data, batch_size=config.batch_size,))
         # fet.print_flags()
+        model(data).loss.backward()
         sys.exit(0)
     else:
         print(f"{model_name} parameters: {num_params:.5e}")
@@ -192,8 +192,26 @@ def main():
 
     # Cosine annealing learning rate
     if config.lr_schedule == "cosine_warmup":
-        cos = cosLr(config.train_epochs)
-        lr_sched = lambda e: min(e / (0.01 * config.train_epochs), 1) * cos(e)
+        num_warmup_epochs = int(0.05 * config.train_epochs)
+        num_warmup_steps = num_warmup_epochs
+        num_training_steps = config.train_epochs
+        lr_schedule = transformers.get_cosine_schedule_with_warmup(
+            model_opt,
+            num_warmup_steps=num_warmup_steps,
+            num_training_steps=num_training_steps,
+        )
+        # b = []
+        # for i in range(num_training_steps * len(dataloaders["train"])):
+        #     b.append(model_opt.param_groups[0]["lr"])
+        #     lr_schedule.step(i / len(dataloaders["train"]))
+        # for i in b:
+        #     print(i)
+        # print(b)
+        # print(b[8000])
+        # print(num_training_steps)
+        # print(max(zip(b, range(len(b)))))
+        # sys.exit(0)
+
     elif config.lr_schedule == "quadratic_warmup":
         lr_sched = lambda e: min(e / (0.01 * config.train_epochs), 1) * (
             1.0
@@ -201,14 +219,14 @@ def main():
                 1.0 + 10000.0 * (e / config.train_epochs)
             )  # finish at 1/100 of initial lr
         )
+        lr_schedule = optim.lr_scheduler.LambdaLR(model_opt, lr_sched)
     elif config.lr_schedule == "none":
         lr_sched = lambda e: 1.0
+        lr_schedule = optim.lr_scheduler.LambdaLR(model_opt, lr_sched)
     else:
         raise ValueError(
             f"{config.lr_schedule} is not a recognised learning rate schedule"
         )
-
-    lr_schedule = optim.lr_scheduler.LambdaLR(model_opt, lr_sched)
 
     # Try to restore model and optimizer from checkpoint
     if resume_checkpoint is not None:
@@ -224,20 +242,30 @@ def main():
 
     # Do model profiling if desired
     if config.profile_model:
-        import torch.autograd.profiler as profiler
+        # import torch.autograd.profiler as profiler
 
         # model.to("cpu")
 
-        data = next(iter(dataloaders["train"]))
+        # data = next(iter(dataloaders["train"]))
 
-        data = {k: v.to(device) for k, v in data.items()}
+        # data = {k: v.to(device) for k, v in data.items()}
 
-        with profiler.profile(profile_memory=True, record_shapes=True) as prof:
-            with profiler.record_function("model_inference"):
-                outputs = model(data, compute_loss=True)
+        # # with torch.cuda.profiler.profile():
+        # #     outputs = model(data, compute_loss=True)
+        # #     outputs.loss.backward()
+        # #     with torch.autograd.profiler.emit_nvtx() as prof:
+        # #         outputs = model(data, compute_loss=True)
+        # #         outputs.loss.backward()
 
-        print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
-        print(prof.key_averages().table(sort_by="self_cpu_memory_usage", row_limit=10))
+        # with profiler.profile(profile_memory=True, record_shapes=True) as prof:
+        #     with profiler.record_function("model_inference"):
+        #         outputs = model(data, compute_loss=True)
+        #         outputs.loss.backward()
+
+        # print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
+        # print(prof.key_averages().table(sort_by="cuda_memory_usage", row_limit=10))
+
+        parameter_analysis(model)
 
         sys.exit(0)
 
