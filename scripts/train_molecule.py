@@ -130,18 +130,18 @@ def main():
 
     num_params = param_count(model)
     if config.parameter_count:
-        print(model)
-        print("============================================================")
-        print(f"{model_name} parameters: {num_params:.5e}")
-        print("============================================================")
-        from torchsummary import summary
+        with torch.no_grad():
+            print(model)
+            print("============================================================")
+            print(f"{model_name} parameters: {num_params:.5e}")
+            print("============================================================")
+            from torchsummary import summary
 
-        data = next(iter(dataloaders["train"]))
-        data = {k: v.to(device) for k, v in data.items()}
-        print(summary(model.predictor, data, batch_size=config.batch_size,))
-        # fet.print_flags()
-        model(data).loss.backward()
-        sys.exit(0)
+            data = next(iter(dataloaders["train"]))
+            data = {k: v.to(device) for k, v in data.items()}
+            print(summary(model.predictor, data, batch_size=config.batch_size,))
+            print(model(data).prediction)
+            sys.exit(0)
     else:
         print(f"{model_name} parameters: {num_params:.5e}")
 

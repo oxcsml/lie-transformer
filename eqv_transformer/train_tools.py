@@ -93,7 +93,8 @@ def load_checkpoint(checkpoint_path, model, opt, lr_sched=None):
     model.load_state_dict(checkpoint["model_state_dict"])
 
     # Restore optimizer
-    opt.load_state_dict(checkpoint["model_optimizer_state_dict"])
+    if opt is not None:
+        opt.load_state_dict(checkpoint["model_optimizer_state_dict"])
 
     # Restore LR schedule
     if lr_sched is not None:
