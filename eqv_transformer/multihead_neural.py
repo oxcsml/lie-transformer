@@ -131,3 +131,34 @@ def MultiheadMLP(in_dim, hid_dim, out_dim, n_heads, n_layers, act, bn):
             )
         )
         return nn.Sequential(OrderedDict(layers))
+
+
+def LinearBNact(chin, chout, act="swish", bn=True):
+    """assumes that the inputs to the net are shape (bs,n,mc_samples,c)"""
+    assert act in ("relu", "swish"), f"unknown activation type {act}"
+    normlayer = MaskBatchNormNd(chout)
+    return nn.Sequential(
+        OrderedDict(
+            [
+                ("linear", Pass(nn.Linear(chin, chout), dim=1)),
+                ("norm", normlayer if bn else nn.Sequential()),
+                ("activation", Pass(Swish() if act == "swish" else nn.ReLU(), dim=1)),
+            ]
+        )
+    )
+
+
+def MLP(dim_in, dim_hid, dim_out, num_layers, act, bn):
+    if num_layers == 1:
+        return nn.Sequential(
+            OrderedDict([("LinNormAct_1", LinearBNact(dim_in, dim_out, act, bn))])
+        )
+    else:
+        layers = []
+        layers.append(("LinNormAct_1", LinearBNact(dim_in, dim_hid, act, bn)))
+        for i in range(1, num_layers):
+            layers.append((f"LinNormAct_{i+1}", LinearBNact(dim_hid, dim_hid, act, bn)))
+        layers.append(
+            (f"LinNormAct_{num_layers}", LinearBNact(dim_hid, dim_out, act, bn))
+        )
+        return nn.Sequential(OrderedDict(layers))
