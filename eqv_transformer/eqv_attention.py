@@ -51,6 +51,7 @@ class EquivairantMultiheadAttention(nn.Module):
 
         self.mc_samples = mc_samples
         self.fill = fill
+        self.kernel_type = kernel_type
 
         if not (attention_fn in ["softmax", "dot_product"]):
             raise NotImplementedError(f"{attention_fn} not implemented.")
@@ -112,7 +113,7 @@ class EquivairantMultiheadAttention(nn.Module):
             )
         elif kernel_type == "dot_product_only":
             self.kernel = SumKernel(
-                lambda x: torch.zeros(x[2].shape + (n_heads,), device=x[2].device),
+                lambda x: [None, torch.zeros(x[1].shape[:-1], device=x[2].device).unsqueeze(-1), None], # unsure what's going on here. Dims don't match so trying to fix it.
                 DotProductKernel(c_in, c_in, c_in, n_heads=n_heads),
                 n_heads,
             )
@@ -339,7 +340,7 @@ class EquivariantTransformerBlock(nn.Module):
 
         if block_norm == "none":
             self.attention_function = lambda inpt: inpt[1] + self.ema(inpt)[1]
-            self.mlp_function = lambda inpt: inpt[1] + self.mlp(inpt)
+            self.mlp_function = lambda inpt: inpt[1] + self.mlp(inpt)[1]
         elif block_norm == "layer_pre":
             self.ln_ema = nn.LayerNorm(dim)
             self.ln_mlp = nn.LayerNorm(dim)
@@ -367,12 +368,12 @@ class EquivariantTransformerBlock(nn.Module):
             self.attention_function = (
                 lambda inpt: inpt[1] + self.ema(self.bn_ema(inpt))[1]
             )
-            self.mlp_function = lambda inpt: inpt[1] + self.mlp(self.bn_mlp(inpt[1]))[1]
+            self.mlp_function = lambda inpt: inpt[1] + self.mlp(self.bn_mlp(inpt))[1]
         elif block_norm == "batch_post":
             self.bn_ema = MaskBatchNormNd(dim)
             self.bn_mlp = MaskBatchNormNd(dim)
 
-            self.attention_function = lambda inpt: inpt[1] + self.bn_ema(self.ema(inpt))
+            self.attention_function = lambda inpt: inpt[1] + self.bn_ema(self.ema(inpt))[1]
             self.mlp_function = lambda inpt: inpt[1] + self.bn_mlp(self.mlp(inpt))[1]
         elif block_norm == "DW":
             self.mlp = nn.Sequential(
@@ -414,7 +415,7 @@ class EquivariantTransformerBlock(nn.Module):
                 (inpt[0], inpt[1] + self.mlp(inpt)[1], inpt[2])
             )[1]
         else:
-            raise ValueError(f"{block_norm} is invalid block norm type")
+            raise ValueError(f"{block_norm} is invalid block norm type.")
 
     def forward(self, inpt):
         # # optional layer norm
@@ -481,7 +482,7 @@ class EquivariantTransformer(nn.Module):
         kernel_norm="none",
         kernel_type="mlp",
         kernel_dim=16,
-        kernel_act="swish",
+        kernel_act="swish", # why "kernel" activation?
         mc_samples=0,
         fill=1.0,
         architecture="model_1",
@@ -516,7 +517,7 @@ class EquivariantTransformer(nn.Module):
                 norm1 = nn.BatchNorm1d(dim_hidden[-1])
                 norm2 = nn.BatchNorm1d(dim_hidden[-1])
                 norm3 = nn.BatchNorm1d(dim_hidden[-1])
-            elif output_norm == "linear":
+            elif output_norm == "layer":
                 norm1 = nn.LayerNorm(dim_hidden[-1])
                 norm2 = nn.LayerNorm(dim_hidden[-1])
                 norm3 = nn.LayerNorm(dim_hidden[-1])
@@ -525,7 +526,7 @@ class EquivariantTransformer(nn.Module):
                 norm2 = nn.Sequential()
                 norm3 = nn.Sequential()
             else:
-                raise ValueError(f"{output_norm} is not a valid norm type")
+                raise ValueError(f"{output_norm} is not a valid norm type.")
 
             self.net = nn.Sequential(
                 Pass(nn.Linear(dim_input, dim_hidden[0]), dim=1),
@@ -538,13 +539,13 @@ class EquivariantTransformer(nn.Module):
                 else Expression(lambda x: x[1]),
                 nn.Sequential(
                     norm1,
-                    Swish(),
+                    Swish() if kernel_act == "swish" else nn.ReLU(), # to be consistent with "lieconv" arch below.
                     nn.Linear(dim_hidden[-1], dim_hidden[-1]),
                     norm2,
-                    Swish(),
+                    Swish() if kernel_act == "swish" else nn.ReLU(),
                     nn.Linear(dim_hidden[-1], dim_hidden[-1]),
                     norm3,
-                    Swish(),
+                    Swish() if kernel_act == "swish" else nn.ReLU(),
                     nn.Linear(dim_hidden[-1], dim_output),
                 ),
             )
@@ -554,7 +555,7 @@ class EquivariantTransformer(nn.Module):
             elif output_norm == "none":
                 norm = nn.Sequential()
             else:
-                raise ValueError(f"{output_norm} is not a valid norm type")
+                raise ValueError(f"{output_norm} is not a valid norm type.")
 
             self.net = nn.Sequential(
                 Pass(nn.Linear(dim_input, dim_hidden[0]), dim=1),
@@ -597,7 +598,7 @@ class EquivariantTransformer(nn.Module):
                 GlobalPool(mean=global_pool_mean),
             )
         else:
-            raise ValueError(f"{architecture} is not a valid architecture")
+            raise ValueError(f"{architecture} is not a valid architecture.")
 
         self.group = group
         self.liftsamples = liftsamples
