@@ -39,6 +39,7 @@ class EquivairantMultiheadAttention(nn.Module):
         mc_samples=0,
         fill=1.0,
         attention_fn="softmax",
+        feature_embed_dim=None,
     ):
 
         super().__init__()
@@ -83,6 +84,7 @@ class EquivairantMultiheadAttention(nn.Module):
                 location_featurisation=location_featurisation,
                 location_feature_combination=location_feature_combination,
                 hidden_dim=kernel_dim,
+                feature_embed_dim=feature_embed_dim,
                 activation=act,
             )
 
@@ -315,6 +317,7 @@ class EquivariantTransformerBlock(nn.Module):
         mc_samples=0,
         fill=1.0,
         attention_fn="softmax",
+        feature_embed_dim=None,
     ):
         super().__init__()
         self.ema = EquivairantMultiheadAttention(
@@ -329,6 +332,7 @@ class EquivariantTransformerBlock(nn.Module):
             mc_samples=mc_samples,
             fill=fill,
             attention_fn=attention_fn,
+            feature_embed_dim=feature_embed_dim,
         )
 
         self.mlp = MLP(dim, dim, dim, 2, kernel_act, kernel_norm == "batch")
@@ -482,6 +486,7 @@ class EquivariantTransformer(nn.Module):
         fill=1.0,
         architecture="model_1",
         attention_fn="softmax",  # softmax or dot product? SZ: TODO: "dot product" is used to describe both the attention weights being non-softmax (non-local attention paper) and the feature kernel. should fix terminology
+        feature_embed_dim=None,
     ):
         super().__init__()
 
@@ -503,6 +508,7 @@ class EquivariantTransformer(nn.Module):
             mc_samples=mc_samples,
             fill=fill,
             attention_fn=attention_fn,
+            feature_embed_dim=feature_embed_dim,
         )
 
         if architecture == "model_1":

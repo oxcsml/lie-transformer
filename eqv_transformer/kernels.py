@@ -30,10 +30,15 @@ class AttentionKernel(nn.Module):
         location_feature_combination="sum",
         normalisation="none",
         hidden_dim=16,
+        feature_embed_dim=None,
         activation="swish",
     ):
 
         super().__init__()
+
+        if feature_embed_dim is None:
+            feature_embed_dim = int(feature_dim / (4 * n_heads))
+            print(feature_embed_dim)
 
         if feature_featurisation == "dot_product":
             self.feature_featurisation = DotProductKernel(
@@ -42,13 +47,13 @@ class AttentionKernel(nn.Module):
             featurised_feature_dim = 1
         elif feature_featurisation == "linear_concat":
             self.feature_featurisation = LinearConcatEmbedding(
-                int(feature_dim / 8), feature_dim, feature_dim, n_heads
+                int(feature_embed_dim * n_heads / 2), feature_dim, feature_dim, n_heads
             )
-            featurised_feature_dim = int(feature_dim / (4 * n_heads))
+            featurised_feature_dim = feature_embed_dim
         elif feature_featurisation == "linear_concat_linear":
-            featurised_feature_dim = int(feature_dim / (4 * n_heads))
+            featurised_feature_dim = feature_embed_dim
             self.feature_featurisation = LinearConcatLinearEmbedding(
-                int(feature_dim / 4), feature_dim, feature_dim, n_heads
+                feature_embed_dim * n_heads, feature_dim, feature_dim, n_heads
             )
         else:
             raise ValueError(
@@ -164,8 +169,7 @@ class AttentionKernel(nn.Module):
         attention_weights = self.location_feature_combination(
             [feature_features, location_features]
         )
-
-        return self.normalisation(attention_weights.squeeze(), nbhd_mask)
+        return self.normalisation(attention_weights, nbhd_mask)
 
 
 class SumKernel(nn.Module):

@@ -40,6 +40,7 @@ from eqv_transformer.molecule_predictor import MoleculePredictor
 from eqv_transformer.multihead_neural import MultiheadLinear
 from lie_conv.utils import Pass, Expression
 from lie_conv.masked_batchnorm import MaskBatchNormNd
+from oil.utils.utils import cosLr
 
 
 if torch.cuda.is_available():
@@ -106,6 +107,7 @@ flags.DEFINE_boolean(
     "produce initialisation activation histograms the activations of specified modules through training",
 )
 flags.DEFINE_boolean("profile_model", False, "Run profiling code on model and exit")
+flags.DEFINE_boolean("amp", False, "Use automatic mixed precision training")
 
 #####################################################################################################################
 
@@ -127,23 +129,6 @@ def main():
     # Load model
     model, model_name = fet.load(config.model_config, config)
     model.to(device)
-
-    num_params = param_count(model)
-    if config.parameter_count:
-        with torch.no_grad():
-            print(model)
-            print("============================================================")
-            print(f"{model_name} parameters: {num_params:.5e}")
-            print("============================================================")
-            from torchsummary import summary
-
-            data = next(iter(dataloaders["train"]))
-            data = {k: v.to(device) for k, v in data.items()}
-            print(summary(model.predictor, data, batch_size=config.batch_size,))
-            print(model(data).prediction)
-            sys.exit(0)
-    else:
-        print(f"{model_name} parameters: {num_params:.5e}")
 
     config.charge_scale = float(config.charge_scale.numpy())
     config.ds_stats = [float(stat.numpy()) for stat in config.ds_stats]
@@ -169,15 +154,6 @@ def main():
     # if config.kernel_norm != "none":
     #     run_name += "_" + config.kernel_norm
 
-    results_folder_name = osp.join(data_name, model_name, run_name,)
-
-    logdir = osp.join(config.results_dir, results_folder_name.replace(".", "_"))
-    logdir, resume_checkpoint = fet.init_checkpoint(
-        logdir, config.data_config, config.model_config, config.resume
-    )
-
-    checkpoint_name = osp.join(logdir, "model.ckpt")
-
     # Print flags
     fet.print_flags()
 
@@ -192,26 +168,17 @@ def main():
 
     # Cosine annealing learning rate
     if config.lr_schedule == "cosine_warmup":
-        num_warmup_epochs = int(0.05 * config.train_epochs)
-        num_warmup_steps = num_warmup_epochs
-        num_training_steps = config.train_epochs
-        lr_schedule = transformers.get_cosine_schedule_with_warmup(
-            model_opt,
-            num_warmup_steps=num_warmup_steps,
-            num_training_steps=num_training_steps,
-        )
-        # b = []
-        # for i in range(num_training_steps * len(dataloaders["train"])):
-        #     b.append(model_opt.param_groups[0]["lr"])
-        #     lr_schedule.step(i / len(dataloaders["train"]))
-        # for i in b:
-        #     print(i)
-        # print(b)
-        # print(b[8000])
-        # print(num_training_steps)
-        # print(max(zip(b, range(len(b)))))
-        # sys.exit(0)
-
+        # num_warmup_epochs = int(0.05 * config.train_epochs)
+        # num_warmup_steps = num_warmup_epochs
+        # num_training_steps = config.train_epochs
+        # lr_schedule = transformers.get_cosine_schedule_with_warmup(
+        #     model_opt,
+        #     num_warmup_steps=num_warmup_steps,
+        #     num_training_steps=num_training_steps,
+        # )
+        cos = cosLr(config.train_epochs)
+        lr_sched = lambda e: min(e / (0.01 * config.train_epochs), 1) * cos(e)
+        lr_schedule = optim.lr_scheduler.LambdaLR(model_opt, lr_sched)
     elif config.lr_schedule == "quadratic_warmup":
         lr_sched = lambda e: min(e / (0.01 * config.train_epochs), 1) * (
             1.0
@@ -228,6 +195,72 @@ def main():
             f"{config.lr_schedule} is not a recognised learning rate schedule"
         )
 
+    num_params = param_count(model)
+    if config.parameter_count:
+        # with torch.no_grad():
+        if config.amp:
+            from torch.cuda.amp import autocast, GradScaler
+
+            scaler = GradScaler()
+
+        print(model)
+        print("============================================================")
+        print(f"{model_name} parameters: {num_params:.5e}")
+        print("============================================================")
+        from torchsummary import summary
+
+        data = next(iter(dataloaders["train"]))
+        data = {k: v.to(device) for k, v in data.items()}
+
+        if config.amp:
+            with autocast():
+                print(summary(model.predictor, data, batch_size=config.batch_size,))
+        else:
+            print(summary(model.predictor, data, batch_size=config.batch_size,))
+
+        memory_allocations = []
+
+        for batch_idx, data in enumerate(dataloaders["train"]):
+            data = {k: v.to(device) for k, v in data.items()}
+
+            model_opt.zero_grad()
+            if config.amp:
+                with autocast():
+                    outputs = model(data, compute_loss=True)
+                    torch.cuda.empty_cache()
+
+                scaler.scale(outputs.loss).backward()
+            else:
+                outputs = model(data, compute_loss=True)
+                torch.cuda.empty_cache()
+                outputs.loss.backward()
+
+            memory_allocations.append(torch.cuda.memory_reserved() / 1024 / 1024 / 1024)
+            # print(
+            #     "%i torch.cuda.memory_allocated: %0.4fGB"
+            #     % (batch_idx, torch.cuda.memory_allocated() / 1024 / 1024 / 1024)
+            # )
+            # print(
+            #     "%i torch.cuda.memory_reserved:  %0.4fGB"
+            #     % (batch_idx, torch.cuda.memory_reserved() / 1024 / 1024 / 1024)
+            # )
+
+        print(f"max memory reserved in one pass: {max(memory_allocations):0.4}GB")
+        sys.exit(0)
+
+    else:
+        print(f"{model_name} parameters: {num_params:.5e}")
+
+    # set up results folders
+    results_folder_name = osp.join(data_name, model_name, run_name,)
+
+    logdir = osp.join(config.results_dir, results_folder_name.replace(".", "_"))
+    logdir, resume_checkpoint = fet.init_checkpoint(
+        logdir, config.data_config, config.model_config, config.resume
+    )
+
+    checkpoint_name = osp.join(logdir, "model.ckpt")
+
     # Try to restore model and optimizer from checkpoint
     if resume_checkpoint is not None:
         start_epoch = load_checkpoint(resume_checkpoint, model, model_opt, lr_schedule)
@@ -239,35 +272,6 @@ def main():
     ) + 1
 
     print("Starting training at epoch = {}, iter = {}".format(start_epoch, train_iter))
-
-    # Do model profiling if desired
-    if config.profile_model:
-        # import torch.autograd.profiler as profiler
-
-        # model.to("cpu")
-
-        # data = next(iter(dataloaders["train"]))
-
-        # data = {k: v.to(device) for k, v in data.items()}
-
-        # # with torch.cuda.profiler.profile():
-        # #     outputs = model(data, compute_loss=True)
-        # #     outputs.loss.backward()
-        # #     with torch.autograd.profiler.emit_nvtx() as prof:
-        # #         outputs = model(data, compute_loss=True)
-        # #         outputs.loss.backward()
-
-        # with profiler.profile(profile_memory=True, record_shapes=True) as prof:
-        #     with profiler.record_function("model_inference"):
-        #         outputs = model(data, compute_loss=True)
-        #         outputs.loss.backward()
-
-        # print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
-        # print(prof.key_averages().table(sort_by="cuda_memory_usage", row_limit=10))
-
-        parameter_analysis(model)
-
-        sys.exit(0)
 
     # Setup tensorboard writing
     summary_writer = SummaryWriter(logdir)
@@ -538,6 +542,10 @@ def main():
             save_checkpoint(
                 checkpoint_name, epoch, model, model_opt, lr_schedule, outputs.loss,
             )
+
+    save_checkpoint(
+        checkpoint_name, "final", model, model_opt, lr_schedule, outputs.loss,
+    )
 
 
 if __name__ == "__main__":

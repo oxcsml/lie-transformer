@@ -62,6 +62,11 @@ flags.DEFINE_string(
 flags.DEFINE_string(
     "attention_fn", "softmax", "Type of attention function to use. softmax/dot_product"
 )
+flags.DEFINE_integer(
+    "feature_embed_dim",
+    None,
+    "Dimensionality of the embedding of the features for each head. Only used by some kernels",
+)
 
 
 class MoleculeEquivariantTransformer(EquivariantTransformer):
@@ -129,6 +134,7 @@ def load(config, **unused_kwargs):
         fill=config.fill,
         mc_samples=config.mc_samples,
         attention_fn=config.attention_fn,
+        feature_embed_dim=config.feature_embed_dim,
     )
 
     # predictor.net[-1][-1].weight.data = predictor.net[-1][-1].weight * (0.205 / 0.005)
