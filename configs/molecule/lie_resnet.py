@@ -12,7 +12,6 @@ flags.DEFINE_bool(
     False,
     "Apply data augmentation to the data before passing to the model",
 )
-flags.DEFINE_integer("channel_width", 1536, "Number of channels to use in each layer")
 flags.DEFINE_integer(
     "nbhd_size", 25, "The number of samples to use for Monte Carlo estimation"
 )
@@ -36,6 +35,7 @@ flags.DEFINE_float(
 flags.DEFINE_integer(
     "lift_samples", 4, "Number of coset lift samples to use for non-trivial stabilisers"
 )
+flags.DEFINE_integer("model_seed", 0, "Model rng seed")
 
 
 def load(config, **unused_kwargs):
@@ -51,7 +51,7 @@ def load(config, **unused_kwargs):
     else:
         raise ValueError(f"{config.group} is and invalid group")
 
-    torch.manual_seed(0)  # TODO: temp fix of seed
+    torch.manual_seed(config.model_seed)  # TODO: temp fix of seed
     predictor = MolecLieResNet(
         config.num_species,
         config.charge_scale,
