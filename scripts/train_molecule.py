@@ -108,6 +108,13 @@ flags.DEFINE_boolean(
 )
 flags.DEFINE_boolean("profile_model", False, "Run profiling code on model and exit")
 flags.DEFINE_boolean("amp", False, "Use automatic mixed precision training")
+flags.DEFINE_float(
+    "lr_floor", 0.01, "minimum multiplicative factor of the learning rate in annealing"
+)
+flags.DEFINE_float(
+    "warmup_length", 0.01, "fraction of the training time to use for warmup"
+)
+flags.DEFINE_bool("half_precision", False, "Train model with float16s")
 
 #####################################################################################################################
 
@@ -162,12 +169,15 @@ def main():
 
     opt_learning_rate = config.learning_rate
     model_opt = torch.optim.Adam(
-        model_params, lr=opt_learning_rate, betas=(config.beta1, config.beta2)
+        model_params,
+        lr=opt_learning_rate,
+        betas=(config.beta1, config.beta2),
+        eps=1e-4 if config.half_precision else 1e-8,
     )
     # model_opt = torch.optim.SGD(model_params, lr=opt_learning_rate)
 
     # Cosine annealing learning rate
-    if config.lr_schedule == "cosine_warmup":
+    if config.lr_schedule == "cosine":
         # num_warmup_epochs = int(0.05 * config.train_epochs)
         # num_warmup_steps = num_warmup_epochs
         # num_training_steps = config.train_epochs
@@ -177,7 +187,22 @@ def main():
         #     num_training_steps=num_training_steps,
         # )
         cos = cosLr(config.train_epochs)
-        lr_sched = lambda e: min(e / (0.01 * config.train_epochs), 1) * cos(e)
+        lr_sched = lambda e: cos(e)
+        lr_schedule = optim.lr_scheduler.LambdaLR(model_opt, lr_sched)
+    elif config.lr_schedule == "cosine_warmup":
+        # num_warmup_epochs = int(0.05 * config.train_epochs)
+        # num_warmup_steps = num_warmup_epochs
+        # num_training_steps = config.train_epochs
+        # lr_schedule = transformers.get_cosine_schedule_with_warmup(
+        #     model_opt,
+        #     num_warmup_steps=num_warmup_steps,
+        #     num_training_steps=num_training_steps,
+        # )
+        cos = cosLr(config.train_epochs)
+        lr_sched = lambda e: max(
+            min(e / (config.warmup_length * config.train_epochs), 1) * cos(e),
+            config.lr_floor * config.learning_rate,
+        )
         lr_schedule = optim.lr_scheduler.LambdaLR(model_opt, lr_sched)
     elif config.lr_schedule == "quadratic_warmup":
         lr_sched = lambda e: min(e / (0.01 * config.train_epochs), 1) * (
@@ -195,6 +220,9 @@ def main():
             f"{config.lr_schedule} is not a recognised learning rate schedule"
         )
 
+    if config.half_precision:
+        model.half()
+
     num_params = param_count(model)
     if config.parameter_count:
         # with torch.no_grad():
@@ -203,6 +231,9 @@ def main():
 
             scaler = GradScaler()
 
+        for (name, parameter) in model.predictor.named_parameters():
+            print(name, parameter.dtype)
+
         print(model)
         print("============================================================")
         print(f"{model_name} parameters: {num_params:.5e}")
@@ -210,32 +241,46 @@ def main():
         from torchsummary import summary
 
         data = next(iter(dataloaders["train"]))
+
         data = {k: v.to(device) for k, v in data.items()}
+        if config.half_precision:
+            data = {k: v.to(torch.float16) for k, v in data.items()}
 
         if config.amp:
-            with autocast():
-                print(summary(model.predictor, data, batch_size=config.batch_size,))
+            print(summary(model.predictor, data, batch_size=config.batch_size,))
         else:
             print(summary(model.predictor, data, batch_size=config.batch_size,))
+
+        parameters = sum(
+            parameter.numel() for parameter in model.predictor.parameters()
+        )
+        parameters_grad = sum(
+            parameter.numel() if parameter.requires_grad else 0
+            for parameter in model.predictor.parameters()
+        )
+        print(f"Parameters: {parameters:,}")
+        print(f"Parameters grad: {parameters_grad:,}")
 
         memory_allocations = []
 
         for batch_idx, data in enumerate(dataloaders["train"]):
+            print(batch_idx)
             data = {k: v.to(device) for k, v in data.items()}
 
             model_opt.zero_grad()
             if config.amp:
-                with autocast():
-                    outputs = model(data, compute_loss=True)
-                    torch.cuda.empty_cache()
+                outputs = model(data, compute_loss=True)
+                torch.cuda.empty_cache()
 
                 scaler.scale(outputs.loss).backward()
             else:
                 outputs = model(data, compute_loss=True)
                 torch.cuda.empty_cache()
+                memory_allocations.append(
+                    torch.cuda.memory_reserved() / 1024 / 1024 / 1024
+                )
                 outputs.loss.backward()
 
-            memory_allocations.append(torch.cuda.memory_reserved() / 1024 / 1024 / 1024)
             # print(
             #     "%i torch.cuda.memory_allocated: %0.4fGB"
             #     % (batch_idx, torch.cuda.memory_allocated() / 1024 / 1024 / 1024)
@@ -327,7 +372,7 @@ def main():
             # print(len(otpt))
 
             if isinstance(inpt, tuple):
-                if isinstance(inpt[0], list):
+                if isinstance(inpt[0], list) | isinstance(inpt[0], tuple):
                     activations[name + "_inpt"] = inpt[0][1].detach().cpu()
                 else:
                     if len(inpt) == 1:
@@ -351,6 +396,10 @@ def main():
         for name, tracked_module in activation_tracked:
             tracked_module.register_forward_hook(partial(save_activation, name))
 
+    # Grad scaling
+    if config.amp:
+        scaler = torch.cuda.amp.GradScaler()
+
     # Training
     start_t = time.perf_counter()
     if config.log_train_values:
@@ -365,10 +414,19 @@ def main():
 
             model_opt.zero_grad()
             outputs = model(data, compute_loss=True)
-            outputs.loss.backward()
-            model_opt.step()
+
+            if config.amp:
+                scaler.scale(outputs.loss).backward()
+                scaler.step(model_opt)
+                scaler.update()
+            else:
+                outputs.loss.backward()
+                model_opt.step()
 
             if config.init_activations:
+                model_opt.zero_grad()
+                outputs = model(data, compute_loss=True)
+                outputs.loss.backward()
                 for name, activation in activations.items():
                     print(name)
                     summary_writer.add_histogram(
