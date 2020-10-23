@@ -101,6 +101,8 @@ def load_checkpoint(checkpoint_path, model, opt, lr_sched=None):
         lr_sched.load_state_dict(checkpoint["model_lr_sched_state_dict"])
 
     # Update starting epoch
+    if checkpoint["epoch"] == "final":
+        checkpoint["epoch"] = 0
     start_epoch = checkpoint["epoch"] + 1
     return start_epoch
 
