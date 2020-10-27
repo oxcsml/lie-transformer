@@ -52,7 +52,7 @@ class EquivairantMultiheadAttention(nn.Module):
         self.fill = fill
         self.kernel_type = kernel_type
 
-        if not (attention_fn in ["softmax", "dot_product"]):
+        if not (attention_fn in ["softmax", "dot_product", "norm_exp"]):
             raise NotImplementedError(f"{attention_fn} not implemented.")
         self.attention_fn = attention_fn
 
@@ -253,6 +253,27 @@ class EquivairantMultiheadAttention(nn.Module):
             # (bs, n * ns, nbhd_size, h) -> (bs, n * ns, nbhd_size, h)
             attention_weights = F.softmax(presoftmax_weights, dim=2)
 
+        elif self.attention_fn == "norm_exp":
+            # Make masked areas very small attention weights
+            presoftmax_weights = torch.where(
+                # (bs, n * ns, nbhd_size) -> (bs, n * ns, nbhd_size, 1). Constant along head dim
+                nbhd_mask.unsqueeze(-1),
+                presoftmax_weights,
+                torch.tensor(
+                    -1e38,
+                    dtype=presoftmax_weights.dtype,
+                    device=presoftmax_weights.device,
+                )
+                * torch.ones_like(presoftmax_weights),
+            )
+
+            # Compute the normalised attention weights
+            # (bs, n * ns, nbhd_size, h) -> (bs, n * ns, nbhd_size, h)
+            attention_weights = presoftmax_weights.exp()
+            normalization = nbhd_mask.unsqueeze(-1).sum(-2, keepdim=True)
+            normalization = torch.clamp(normalization, min=1)
+            attention_weights = attention_weights / normalization
+            
         # From the non-local attention paper
         elif self.attention_fn == "dot_product":
             attention_weights = torch.where(
@@ -506,6 +527,12 @@ class EquivariantTransformer(nn.Module):
             attention_fn=attention_fn,
         )
 
+        activation_fn = {
+            "swish": Swish,
+            "relu": nn.ReLU,
+            "softplus": nn.Softplus,
+        }
+
         if architecture == "model_1":
             if output_norm == "batch":
                 norm1 = nn.BatchNorm1d(dim_hidden[-1])
@@ -533,13 +560,13 @@ class EquivariantTransformer(nn.Module):
                 else Expression(lambda x: x[1]),
                 nn.Sequential(
                     norm1,
-                    Swish() if kernel_act == "swish" else nn.ReLU(), # to be consistent with "lieconv" arch below.
+                    activation_fn[kernel_act](),
                     nn.Linear(dim_hidden[-1], dim_hidden[-1]),
                     norm2,
-                    Swish() if kernel_act == "swish" else nn.ReLU(),
+                    activation_fn[kernel_act](),
                     nn.Linear(dim_hidden[-1], dim_hidden[-1]),
                     norm3,
-                    Swish() if kernel_act == "swish" else nn.ReLU(),
+                    activation_fn[kernel_act](),
                     nn.Linear(dim_hidden[-1], dim_output),
                 ),
             )
@@ -564,7 +591,7 @@ class EquivariantTransformer(nn.Module):
                             (
                                 "activation",
                                 Pass(
-                                    Swish() if kernel_act == "swish" else nn.ReLU(),
+                                    activation_fn[kernel_act](),
                                     dim=1,
                                 ),
                             ),
