@@ -62,6 +62,11 @@ flags.DEFINE_string(
 flags.DEFINE_string(
     "attention_fn", "softmax", "Type of attention function to use. softmax/dot_product"
 )
+flags.DEFINE_integer(
+    "feature_embed_dim",
+    None,
+    "Dimensionality of the embedding of the features for each head. Only used by some kernels",
+)
 
 
 class MoleculeEquivariantTransformer(EquivariantTransformer):
@@ -72,16 +77,16 @@ class MoleculeEquivariantTransformer(EquivariantTransformer):
         self.random_rotate = SE3aug()
 
     def featurize(self, mb):
-        charges = mb["charges"].float() / self.charge_scale.float()
+        charges = mb["charges"].to(mb["A"].dtype) / self.charge_scale.to(mb["A"].dtype)
         c_vec = torch.stack(
             [torch.ones_like(charges), charges, charges ** 2], dim=-1
         )  #
         one_hot_charges = (
             (mb["one_hot"][:, :, :, None] * c_vec[:, :, None, :])
-            .float()
+            .to(mb["A"].dtype)
             .reshape(*charges.shape, -1)
         )
-        atomic_coords = mb["positions"].float()
+        atomic_coords = mb["positions"].to(mb["A"].dtype)
         atom_mask = mb["charges"] > 0
         # print('orig_mask',atom_mask[0].sum())
         return (atomic_coords, one_hot_charges, atom_mask)
@@ -91,6 +96,7 @@ class MoleculeEquivariantTransformer(EquivariantTransformer):
             x = self.featurize(mb)
             # x = mb
             x = self.random_rotate(x) if self.aug else x
+
         return super().forward(x).squeeze(-1)
 
 
@@ -129,12 +135,16 @@ def load(config, **unused_kwargs):
         fill=config.fill,
         mc_samples=config.mc_samples,
         attention_fn=config.attention_fn,
+        feature_embed_dim=config.feature_embed_dim,
+        amp=config.amp,
     )
 
     # predictor.net[-1][-1].weight.data = predictor.net[-1][-1].weight * (0.205 / 0.005)
     # predictor.net[-1][-1].bias.data = predictor.net[-1][-1].bias - (0.196 + 0.40)
 
-    molecule_predictor = MoleculePredictor(predictor, config.task, config.ds_stats)
+    molecule_predictor = MoleculePredictor(
+        predictor, config.task, config.ds_stats, amp=config.amp
+    )
 
     return (
         molecule_predictor,

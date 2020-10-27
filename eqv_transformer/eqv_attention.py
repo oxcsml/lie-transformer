@@ -39,6 +39,7 @@ class EquivairantMultiheadAttention(nn.Module):
         mc_samples=0,
         fill=1.0,
         attention_fn="softmax",
+        feature_embed_dim=None,
     ):
 
         super().__init__()
@@ -84,6 +85,7 @@ class EquivairantMultiheadAttention(nn.Module):
                 location_featurisation=location_featurisation,
                 location_feature_combination=location_feature_combination,
                 hidden_dim=kernel_dim,
+                feature_embed_dim=feature_embed_dim,
                 activation=act,
             )
 
@@ -111,7 +113,11 @@ class EquivairantMultiheadAttention(nn.Module):
             )
         elif kernel_type == "dot_product_only":
             self.kernel = SumKernel(
-                lambda x: [None, torch.zeros(x[1].shape[:-1], device=x[2].device).unsqueeze(-1), None], # unsure what's going on here. Dims don't match so trying to fix it.
+                lambda x: [
+                    None,
+                    torch.zeros(x[1].shape[:-1], device=x[2].device).unsqueeze(-1),
+                    None,
+                ],  # unsure what's going on here. Dims don't match so trying to fix it.
                 DotProductKernel(c_in, c_in, c_in, n_heads=n_heads),
                 n_heads,
             )
@@ -200,15 +206,15 @@ class EquivairantMultiheadAttention(nn.Module):
         nbhd_pairwise_g = pairwise_g[
             BS, NNS, nbhd_idx
         ]  # (bs, n * ns, n * ns, g_dim) -> (bs, n * ns, nbhd_size, g_dim)
-        nbhd_coset_functions = coset_functions[
-            BS, nbhd_idx
-        ]  # (bs, n * ns, c_in) -> (bs, n * ns, nbhd_size, c_in)
+        # nbhd_coset_functions = coset_functions[
+        #     BS, nbhd_idx
+        # ]  # (bs, n * ns, c_in) -> (bs, n * ns, nbhd_size, c_in)
         nbhd_mask = mask[BS, nbhd_idx]  # (bs, n * ns) -> (bs, n * ns, nbhd_size)
 
         # (bs, n * ns, nbhd_size, g_dim), (bs, n * ns, nbhd_size, c_in), (bs, n * ns, nbhd_size), (bs, n * ns, nbhd_size)
         return (
             nbhd_pairwise_g,
-            nbhd_coset_functions,
+            None,
             nbhd_mask,
             nbhd_idx,
             BS,
@@ -219,6 +225,7 @@ class EquivairantMultiheadAttention(nn.Module):
 
         # (bs, n * ns, n * ns, g_dim), (bs, n * ns, c_in), (bs, n * ns)
         pairwise_g, coset_functions, mask = input
+        bs, n, d = coset_functions.shape
 
         # (bs, n * ns, nbhd_size, g_dim), (bs, n * ns, nbhd_size, c_in), (bs, n * ns, nbhd_size), (bs, n * ns, nbhd_size)
         (
@@ -298,28 +305,49 @@ class EquivairantMultiheadAttention(nn.Module):
         # Pass the inputs through the value linear layer
         # (bs, n * ns, nbhd_size, c_in) -> (bs, n * ns, nbhd_size, c_out)
         # nbhd_coset_functions = self.input_linear(nbhd_coset_functions)
-        nbhd_coset_functions = self.input_linear(coset_functions)[
-            BS, nbhd_idx
-        ]  # More efficient than passing each nbhd through the linear layer
+        # nbhd_coset_functions = self.input_linear(coset_functions.to(torch.float16))[
+        #     BS, nbhd_idx
+        # ]  # More efficient than passing each nbhd through the linear layer
+        coset_functions = self.input_linear(coset_functions)
 
-        # Split the features into heads
-        nbhd_coset_functions = rearrange(
-            nbhd_coset_functions, "b n m (h d) -> b n m h d", h=self.n_heads
+        # nbhd_coset_functions = coset_functions[BS, nbhd_idx]
+
+        # # Split the features into heads
+        # nbhd_coset_functions = rearrange(
+        #     nbhd_coset_functions, "b n m (h d) -> b n m h d", h=self.n_heads
+        # )
+        # # Sum over the coefficients
+        # # TODO: Currently allows self interaction in the attention sum. Some pre matrices?
+        # # (bs, n * ns, nbhd_size, h), (bs, n * ns, nbhd_size, h, c_out / h) -> (bs, n * ns, nbhd_size, h)
+        # coset_functions = (attention_weights.unsqueeze(-1) * nbhd_coset_functions).sum(
+        #     dim=2
+        # )
+        # coset_functions = rearrange(coset_functions, "b n h d -> b n (h d)")
+
+        attention_weights_expanded = torch.zeros(
+            (bs, n, n, self.n_heads),
+            dtype=attention_weights.dtype,
+            device=attention_weights.device,
         )
 
-        # Sum over the coefficients
-        # TODO: Currently allows self interaction in the attention sum. Some pre matrices?
-        # (bs, n * ns, nbhd_size, h), (bs, n * ns, nbhd_size, h, c_out / h) -> (bs, n * ns, nbhd_size, h)
-        coset_functions = (attention_weights.unsqueeze(-1) * nbhd_coset_functions).sum(
-            dim=2
+        # (bs, n, n, h) hopefully?
+        attention_weights_expanded[BS, NNS, nbhd_idx] = attention_weights
+        attention_weights_expanded = rearrange(
+            attention_weights_expanded, "b n m h -> b h n m"
         )
 
-        coset_functions = self.output_linear(
-            rearrange(coset_functions, "b n h d -> b n (h d)")
+        coset_functions = rearrange(
+            coset_functions, "b m (h d) -> b h m d", h=self.n_heads
         )
+
+        coset_functions = attention_weights_expanded.matmul(coset_functions)
+        coset_functions = rearrange(coset_functions, "b h n d -> b n (h d)")
+
+        coset_functions = self.output_linear(coset_functions)
 
         # ( (bs, n * ns, n * ns, g_dim), (bs, n * ns, c_out), (bs, n * ns) )
         return (pairwise_g, coset_functions, mask)
+        # return (pairwise_g, coset_functions.to(torch.float32), mask)
 
 
 class EquivariantTransformerBlock(nn.Module):
@@ -337,6 +365,7 @@ class EquivariantTransformerBlock(nn.Module):
         mc_samples=0,
         fill=1.0,
         attention_fn="softmax",
+        feature_embed_dim=None,
     ):
         super().__init__()
         self.ema = EquivairantMultiheadAttention(
@@ -351,6 +380,7 @@ class EquivariantTransformerBlock(nn.Module):
             mc_samples=mc_samples,
             fill=fill,
             attention_fn=attention_fn,
+            feature_embed_dim=feature_embed_dim,
         )
 
         self.mlp = MLP(dim, dim, dim, 2, kernel_act, kernel_norm == "batch")
@@ -390,7 +420,9 @@ class EquivariantTransformerBlock(nn.Module):
             self.bn_ema = MaskBatchNormNd(dim)
             self.bn_mlp = MaskBatchNormNd(dim)
 
-            self.attention_function = lambda inpt: inpt[1] + self.bn_ema(self.ema(inpt))[1]
+            self.attention_function = (
+                lambda inpt: inpt[1] + self.bn_ema(self.ema(inpt))[1]
+            )
             self.mlp_function = lambda inpt: inpt[1] + self.bn_mlp(self.mlp(inpt))[1]
         elif block_norm == "DW":
             self.mlp = nn.Sequential(
@@ -471,15 +503,29 @@ class GlobalPool(nn.Module):
         if len(x) == 2:
             return x[1].mean(1)
         coords, vals, mask = x
-        summed = torch.where(mask.unsqueeze(-1), vals, torch.zeros_like(vals)).sum(1)
+
         if self.mean:
+            # mean pooling
+            summed = torch.where(mask.unsqueeze(-1), vals, torch.zeros_like(vals)).sum(
+                1
+            )
             summed_mask = mask.sum(-1).unsqueeze(-1)
             summed_mask = torch.where(
                 summed_mask == 0, torch.ones_like(summed_mask), summed_mask
             )
             summed /= summed_mask
 
-        return summed
+            return summed
+        else:
+            # max pooling
+            masked = torch.where(
+                mask.unsqueeze(-1),
+                vals,
+                torch.tensor(-1e38, dtype=vals.dtype, device=vals.device,)
+                * torch.ones_like(vals),
+            )
+
+            return masked.max(dim=1)[0]
 
 
 class EquivariantTransformer(nn.Module):
@@ -499,11 +545,13 @@ class EquivariantTransformer(nn.Module):
         kernel_norm="none",
         kernel_type="mlp",
         kernel_dim=16,
-        kernel_act="swish", # why "kernel" activation?
+        kernel_act="swish",  # why "kernel" activation?
         mc_samples=0,
         fill=1.0,
         architecture="model_1",
         attention_fn="softmax",  # softmax or dot product? SZ: TODO: "dot product" is used to describe both the attention weights being non-softmax (non-local attention paper) and the feature kernel. should fix terminology
+        feature_embed_dim=None,
+        amp=False,
     ):
         super().__init__()
 
@@ -525,6 +573,7 @@ class EquivariantTransformer(nn.Module):
             mc_samples=mc_samples,
             fill=fill,
             attention_fn=attention_fn,
+            feature_embed_dim=feature_embed_dim,
         )
 
         activation_fn = {
@@ -560,7 +609,13 @@ class EquivariantTransformer(nn.Module):
                 else Expression(lambda x: x[1]),
                 nn.Sequential(
                     norm1,
+<<<<<<< HEAD
                     activation_fn[kernel_act](),
+=======
+                    Swish()
+                    if kernel_act == "swish"
+                    else nn.ReLU(),  # to be consistent with "lieconv" arch below.
+>>>>>>> f8e9335230e80f72820e3ec2e71a8ce846653f1d
                     nn.Linear(dim_hidden[-1], dim_hidden[-1]),
                     norm2,
                     activation_fn[kernel_act](),
@@ -623,8 +678,11 @@ class EquivariantTransformer(nn.Module):
 
         self.group = group
         self.liftsamples = liftsamples
+        self.amp = amp
 
     def forward(self, input):
         lifted_data = self.group.lift(input, self.liftsamples)
-        return self.net(lifted_data)
+
+        with torch.cuda.amp.autocast(enabled=self.amp):
+            return self.net(lifted_data)
 
