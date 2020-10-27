@@ -609,13 +609,7 @@ class EquivariantTransformer(nn.Module):
                 else Expression(lambda x: x[1]),
                 nn.Sequential(
                     norm1,
-<<<<<<< HEAD
                     activation_fn[kernel_act](),
-=======
-                    Swish()
-                    if kernel_act == "swish"
-                    else nn.ReLU(),  # to be consistent with "lieconv" arch below.
->>>>>>> f8e9335230e80f72820e3ec2e71a8ce846653f1d
                     nn.Linear(dim_hidden[-1], dim_hidden[-1]),
                     norm2,
                     activation_fn[kernel_act](),
