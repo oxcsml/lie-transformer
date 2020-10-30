@@ -298,10 +298,10 @@ class EquivairantMultiheadAttention(nn.Module):
         # # Sum over the coefficients
         # # TODO: Currently allows self interaction in the attention sum. Some pre matrices?
         # # (bs, n * ns, nbhd_size, h), (bs, n * ns, nbhd_size, h, c_out / h) -> (bs, n * ns, nbhd_size, h)
-        # coset_functions = (attention_weights.unsqueeze(-1) * nbhd_coset_functions).sum(
-        #     dim=2
-        # )
-        # coset_functions = rearrange(coset_functions, "b n h d -> b n (h d)")
+        # coset_functions_1 = (
+        #     attention_weights.unsqueeze(-1) * nbhd_coset_functions
+        # ).sum(dim=2)
+        # coset_functions_1 = rearrange(coset_functions_1, "b n h d -> b n (h d)")
 
         attention_weights_expanded = torch.zeros(
             (bs, n, n, self.n_heads),

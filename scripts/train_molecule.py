@@ -109,7 +109,7 @@ flags.DEFINE_boolean(
 flags.DEFINE_boolean("profile_model", False, "Run profiling code on model and exit")
 flags.DEFINE_boolean("amp", False, "Use automatic mixed precision training")
 flags.DEFINE_float(
-    "lr_floor", 0.01, "minimum multiplicative factor of the learning rate in annealing"
+    "lr_floor", 0, "minimum multiplicative factor of the learning rate in annealing"
 )
 flags.DEFINE_float(
     "warmup_length", 0.01, "fraction of the training time to use for warmup"
@@ -187,7 +187,7 @@ def main():
         #     num_training_steps=num_training_steps,
         # )
         cos = cosLr(config.train_epochs)
-        lr_sched = lambda e: cos(e)
+        lr_sched = lambda e: max(cos(e), config.lr_floor * config.learning_rate)
         lr_schedule = optim.lr_scheduler.LambdaLR(model_opt, lr_sched)
     elif config.lr_schedule == "cosine_warmup":
         # num_warmup_epochs = int(0.05 * config.train_epochs)
