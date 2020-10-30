@@ -50,7 +50,7 @@ def print_reports(report_dict, start_time, epoch, batch_idx, num_epochs, prefix=
 
     print(
         "time {:.03f},  epoch: {} [{} / {}]: {}".format(
-            time.perf_counter() - start_time,
+            time.time() - start_time,
             epoch,
             batch_idx,
             num_epochs,

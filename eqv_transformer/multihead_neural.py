@@ -9,6 +9,13 @@ from lie_conv.masked_batchnorm import MaskBatchNormNd
 from lie_conv.utils import Pass
 
 
+activation_fn = {
+    "swish": Swish,
+    "relu": nn.ReLU,
+    "softplus": nn.Softplus,
+}
+
+
 class MultiheadLinear(nn.Module):
     """ Layer to perform n_heads MLPs in parallel for multihead kernels
 
@@ -60,14 +67,14 @@ class MultiheadLinear(nn.Module):
 
 def MultiheadLinearBNact(c_in, c_out, n_heads, act="swish", bn=True):
     """??(from LieConv - not sure it does assume) assumes that the inputs to the net are shape (bs,n,mc_samples,c)"""
-    assert act in ("relu", "swish"), f"unknown activation type {act}"
+    assert act in ("relu", "swish", "softplus"), f"unknown activation type {act}"
     normlayer = MaskBatchNormNd(c_out)
     return nn.Sequential(
         OrderedDict(
             [
                 ("linear", Pass(MultiheadLinear(n_heads, c_in, c_out), dim=1)),
                 ("norm", normlayer if bn else nn.Sequential()),
-                ("activation", Pass(Swish() if act == "swish" else nn.ReLU(), dim=1)),
+                ("activation", Pass(activation_fn[act](), dim=1)),
             ]
         )
     )
@@ -135,14 +142,14 @@ def MultiheadMLP(in_dim, hid_dim, out_dim, n_heads, n_layers, act, bn):
 
 def LinearBNact(chin, chout, act="swish", bn=True):
     """assumes that the inputs to the net are shape (bs,n,mc_samples,c)"""
-    assert act in ("relu", "swish"), f"unknown activation type {act}"
+    assert act in ("relu", "swish", "softplus"), f"unknown activation type {act}"
     normlayer = MaskBatchNormNd(chout)
     return nn.Sequential(
         OrderedDict(
             [
                 ("linear", Pass(nn.Linear(chin, chout), dim=1)),
                 ("norm", normlayer if bn else nn.Sequential()),
-                ("activation", Pass(Swish() if act == "swish" else nn.ReLU(), dim=1)),
+                ("activation", Pass(activation_fn[act](), dim=1)),
             ]
         )
     )
