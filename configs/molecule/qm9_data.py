@@ -59,7 +59,7 @@ def load(config, **unused_kwargs):
             dataset,
             batch_size=config.batch_size,
             num_workers=0,
-            shuffle=(key == "train"),  # False,  # TODO: temp =
+            shuffle=(key == "train"),
             pin_memory=False,
             collate_fn=collate_fn,
             drop_last=config.batch_fit == 0,
