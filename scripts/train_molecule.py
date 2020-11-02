@@ -9,7 +9,6 @@ import torch
 import torch.nn as nn
 from torch import optim
 from torch.utils.tensorboard import SummaryWriter
-import transformers
 
 import forge
 from forge import flags
