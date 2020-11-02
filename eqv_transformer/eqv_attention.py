@@ -280,7 +280,7 @@ class EquivairantMultiheadAttention(nn.Module):
             normalization = nbhd_mask.unsqueeze(-1).sum(-2, keepdim=True)
             normalization = torch.clamp(normalization, min=1)
             attention_weights = attention_weights / normalization
-            
+
         # From the non-local attention paper
         elif self.attention_fn == "dot_product":
             attention_weights = torch.where(
@@ -551,7 +551,6 @@ class EquivariantTransformer(nn.Module):
         architecture="model_1",
         attention_fn="softmax",  # softmax or dot product? SZ: TODO: "dot product" is used to describe both the attention weights being non-softmax (non-local attention paper) and the feature kernel. should fix terminology
         feature_embed_dim=None,
-        amp=False,
     ):
         super().__init__()
 
@@ -637,13 +636,7 @@ class EquivariantTransformer(nn.Module):
                     OrderedDict(
                         [
                             # ("norm", Pass(norm, dim=1)),
-                            (
-                                "activation",
-                                Pass(
-                                    activation_fn[kernel_act](),
-                                    dim=1,
-                                ),
-                            ),
+                            ("activation", Pass(activation_fn[kernel_act](), dim=1,),),
                             (
                                 "linear",
                                 Pass(nn.Linear(dim_hidden[-1], dim_output), dim=1),
@@ -672,11 +665,8 @@ class EquivariantTransformer(nn.Module):
 
         self.group = group
         self.liftsamples = liftsamples
-        self.amp = amp
 
     def forward(self, input):
         lifted_data = self.group.lift(input, self.liftsamples)
-
-        with torch.cuda.amp.autocast(enabled=self.amp):
-            return self.net(lifted_data)
+        return self.net(lifted_data)
 
