@@ -136,14 +136,13 @@ def load(config, **unused_kwargs):
         mc_samples=config.mc_samples,
         attention_fn=config.attention_fn,
         feature_embed_dim=config.feature_embed_dim,
-        amp=config.amp,
     )
 
     # predictor.net[-1][-1].weight.data = predictor.net[-1][-1].weight * (0.205 / 0.005)
     # predictor.net[-1][-1].bias.data = predictor.net[-1][-1].bias - (0.196 + 0.40)
 
     molecule_predictor = MoleculePredictor(
-        predictor, config.task, config.ds_stats, amp=config.amp
+        predictor, config.task, config.ds_stats
     )
 
     return (
