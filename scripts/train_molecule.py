@@ -25,6 +25,7 @@ from eqv_transformer.train_tools import (
     log_reports,
     load_checkpoint,
     save_checkpoint,
+    delete_checkpoint,
     ExponentialMovingAverage,
     get_component,
     nested_to,
@@ -113,7 +114,9 @@ flags.DEFINE_float(
 flags.DEFINE_float(
     "warmup_length", 0.01, "fraction of the training time to use for warmup"
 )
-flags.DEFINE_bool("half_precision", False, "Train model with float16s")
+flags.DEFINE_boolean(
+    "only_store_last_checkpoint", False, "If True, deletes last checkpoint when saving current checkpoint"
+)
 
 #####################################################################################################################
 
@@ -171,7 +174,7 @@ def main():
         model_params,
         lr=opt_learning_rate,
         betas=(config.beta1, config.beta2),
-        eps=1e-4 if config.half_precision else 1e-8,
+        eps=1e-8,
     )
     # model_opt = torch.optim.SGD(model_params, lr=opt_learning_rate)
 
@@ -218,9 +221,6 @@ def main():
         raise ValueError(
             f"{config.lr_schedule} is not a recognised learning rate schedule"
         )
-
-    if config.half_precision:
-        model.half()
 
     num_params = param_count(model)
     if config.parameter_count:
@@ -570,6 +570,8 @@ def main():
             save_checkpoint(
                 checkpoint_name, epoch, model, model_opt, lr_schedule, outputs.loss,
             )
+            if config.only_store_last_checkpoint:
+                delete_checkpoint(checkpoint_name, epoch - config.save_check_points)
 
     save_checkpoint(
         checkpoint_name, "final", model, model_opt, lr_schedule, outputs.loss,
