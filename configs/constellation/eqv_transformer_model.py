@@ -18,7 +18,7 @@ flags.DEFINE_integer("dim_hidden", 512, "Dimension of features to use in each la
 flags.DEFINE_string(
     "activation_function", "swish", "Activation function to use in the network"
 )
-flags.DEFINE_boolean("layer_norm", True, "Use layer norm in the layers")
+# flags.DEFINE_boolean("layer_norm", True, "Use layer norm in the layers")
 flags.DEFINE_boolean(
     "mean_pooling",
     True,
@@ -26,7 +26,7 @@ flags.DEFINE_boolean(
 )
 flags.DEFINE_integer("num_heads", 8, "Number of attention heads in each layer")
 flags.DEFINE_integer("kernel_dim", 16, "Hidden layer size to use in kernel MLPs")
-flags.DEFINE_boolean("batch_norm", False, "Use batch norm in the kernel MLPs")
+# flags.DEFINE_boolean("batch_norm", False, "Use batch norm in the kernel MLPs")
 flags.DEFINE_integer("num_layers", 6, "Number of ResNet layers to use")
 flags.DEFINE_string("group", "SE2", "Group to be invariant to")
 flags.DEFINE_integer(
@@ -40,8 +40,14 @@ flags.DEFINE_integer(
     10,
     "Number of distance moments to use if using distance moment features",
 )
-# flags.DEFINE_boolean("location_attention", True, "Use location kernel for attention weights.")
-# flags.DEFINE_string("attention_fn", "softmax", "How to form the attention weights from the 'logits'.")
+flags.DEFINE_string(
+    "block_norm", "layer_pre", "Normalization to use around the attention blocks."
+)
+flags.DEFINE_string("output_norm", "none", "Normalization to use in final output MLP.")
+flags.DEFINE_string("kernel_norm", "none", "Normalization to use in kernel MLP.")
+flags.DEFINE_string("kernel_type", "mlp", "Attention kernel type.")
+flags.DEFINE_string("architecture", "model_1", "Overall model architecture.")
+flags.DEFINE_string("attention_fn", "softmax", "How to form attention weights.")
 
 
 def constant_features(X, presence):
@@ -142,15 +148,20 @@ def load(config, **unused_kwargs):
         dim_hidden=config.dim_hidden,
         num_layers=config.num_layers,
         num_heads=config.num_heads,
-        layer_norm=config.layer_norm,
+        # layer_norm=config.layer_norm,
         global_pool=True,
         global_pool_mean=config.mean_pooling,
         liftsamples=config.lift_samples,
         kernel_dim=config.kernel_dim,
         kernel_act=config.activation_function,
-        batch_norm=config.batch_norm,
+        block_norm=config.block_norm,
+        output_norm=config.output_norm,
+        kernel_norm=config.kernel_norm,
+        kernel_type=config.kernel_type,
+        architecture=config.architecture,
+        # batch_norm=config.batch_norm,
         # location_attention=config.location_attention,
-        # attention_fn=config.attention_fn,
+        attention_fn=config.attention_fn,
     )
 
     classifier = Classifier(predictor)
