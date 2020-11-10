@@ -125,3 +125,6 @@ ckpt.store
 sheh_scripts/
 outputs/
 datasets/
+
+# michael stuff
+scripts/ablations

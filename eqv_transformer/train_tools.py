@@ -1,4 +1,5 @@
 import copy
+import os
 import time
 import torch
 from torch import nn
@@ -125,6 +126,12 @@ def save_checkpoint(checkpoint_name, epoch, model, opt, lr_sched=None, loss=None
 
     torch.save(state, epoch_ckpt_file)
     return epoch_ckpt_file
+
+
+def delete_checkpoint(checkpoint_name, epoch):
+    epoch_ckpt_file = "{}-{}".format(checkpoint_name, epoch)
+    os.remove(epoch_ckpt_file)
+    print("Deleted checkpoint file at {}".format(epoch_ckpt_file))
 
 
 class ExponentialMovingAverage(nn.Module):

@@ -9,7 +9,6 @@ import torch
 import torch.nn as nn
 from torch import optim
 from torch.utils.tensorboard import SummaryWriter
-import transformers
 
 import forge
 from forge import flags
@@ -26,6 +25,7 @@ from eqv_transformer.train_tools import (
     log_reports,
     load_checkpoint,
     save_checkpoint,
+    delete_checkpoint,
     ExponentialMovingAverage,
     get_component,
     nested_to,
@@ -109,12 +109,14 @@ flags.DEFINE_boolean(
 flags.DEFINE_boolean("profile_model", False, "Run profiling code on model and exit")
 flags.DEFINE_boolean("amp", False, "Use automatic mixed precision training")
 flags.DEFINE_float(
-    "lr_floor", 0.01, "minimum multiplicative factor of the learning rate in annealing"
+    "lr_floor", 0, "minimum multiplicative factor of the learning rate in annealing"
 )
 flags.DEFINE_float(
     "warmup_length", 0.01, "fraction of the training time to use for warmup"
 )
-flags.DEFINE_bool("half_precision", False, "Train model with float16s")
+flags.DEFINE_boolean(
+    "only_store_last_checkpoint", False, "If True, deletes last checkpoint when saving current checkpoint"
+)
 
 #####################################################################################################################
 
@@ -172,7 +174,7 @@ def main():
         model_params,
         lr=opt_learning_rate,
         betas=(config.beta1, config.beta2),
-        eps=1e-4 if config.half_precision else 1e-8,
+        eps=1e-8,
     )
     # model_opt = torch.optim.SGD(model_params, lr=opt_learning_rate)
 
@@ -187,7 +189,7 @@ def main():
         #     num_training_steps=num_training_steps,
         # )
         cos = cosLr(config.train_epochs)
-        lr_sched = lambda e: cos(e)
+        lr_sched = lambda e: max(cos(e), config.lr_floor * config.learning_rate)
         lr_schedule = optim.lr_scheduler.LambdaLR(model_opt, lr_sched)
     elif config.lr_schedule == "cosine_warmup":
         # num_warmup_epochs = int(0.05 * config.train_epochs)
@@ -220,17 +222,8 @@ def main():
             f"{config.lr_schedule} is not a recognised learning rate schedule"
         )
 
-    if config.half_precision:
-        model.half()
-
     num_params = param_count(model)
     if config.parameter_count:
-        # with torch.no_grad():
-        if config.amp:
-            from torch.cuda.amp import autocast, GradScaler
-
-            scaler = GradScaler()
-
         for (name, parameter) in model.predictor.named_parameters():
             print(name, parameter.dtype)
 
@@ -243,13 +236,7 @@ def main():
         data = next(iter(dataloaders["train"]))
 
         data = {k: v.to(device) for k, v in data.items()}
-        if config.half_precision:
-            data = {k: v.to(torch.float16) for k, v in data.items()}
-
-        if config.amp:
-            print(summary(model.predictor, data, batch_size=config.batch_size,))
-        else:
-            print(summary(model.predictor, data, batch_size=config.batch_size,))
+        print(summary(model.predictor, data, batch_size=config.batch_size,))
 
         parameters = sum(
             parameter.numel() for parameter in model.predictor.parameters()
@@ -268,18 +255,10 @@ def main():
             data = {k: v.to(device) for k, v in data.items()}
 
             model_opt.zero_grad()
-            if config.amp:
-                outputs = model(data, compute_loss=True)
-                torch.cuda.empty_cache()
-
-                scaler.scale(outputs.loss).backward()
-            else:
-                outputs = model(data, compute_loss=True)
-                torch.cuda.empty_cache()
-                memory_allocations.append(
-                    torch.cuda.memory_reserved() / 1024 / 1024 / 1024
-                )
-                outputs.loss.backward()
+            outputs = model(data, compute_loss=True)
+            torch.cuda.empty_cache()
+            memory_allocations.append(torch.cuda.memory_reserved() / 1024 / 1024 / 1024)
+            outputs.loss.backward()
 
             # print(
             #     "%i torch.cuda.memory_allocated: %0.4fGB"
@@ -396,10 +375,6 @@ def main():
         for name, tracked_module in activation_tracked:
             tracked_module.register_forward_hook(partial(save_activation, name))
 
-    # Grad scaling
-    if config.amp:
-        scaler = torch.cuda.amp.GradScaler()
-
     # Training
     start_t = time.perf_counter()
     if config.log_train_values:
@@ -415,13 +390,8 @@ def main():
             model_opt.zero_grad()
             outputs = model(data, compute_loss=True)
 
-            if config.amp:
-                scaler.scale(outputs.loss).backward()
-                scaler.step(model_opt)
-                scaler.update()
-            else:
-                outputs.loss.backward()
-                model_opt.step()
+            outputs.loss.backward()
+            model_opt.step()
 
             if config.init_activations:
                 model_opt.zero_grad()
@@ -600,6 +570,8 @@ def main():
             save_checkpoint(
                 checkpoint_name, epoch, model, model_opt, lr_schedule, outputs.loss,
             )
+            if config.only_store_last_checkpoint:
+                delete_checkpoint(checkpoint_name, epoch - config.save_check_points)
 
     save_checkpoint(
         checkpoint_name, "final", model, model_opt, lr_schedule, outputs.loss,

@@ -280,7 +280,7 @@ class EquivairantMultiheadAttention(nn.Module):
             normalization = nbhd_mask.unsqueeze(-1).sum(-2, keepdim=True)
             normalization = torch.clamp(normalization, min=1)
             attention_weights = attention_weights / normalization
-            
+
         # From the non-local attention paper
         elif self.attention_fn == "dot_product":
             attention_weights = torch.where(
@@ -319,10 +319,10 @@ class EquivairantMultiheadAttention(nn.Module):
         # # Sum over the coefficients
         # # TODO: Currently allows self interaction in the attention sum. Some pre matrices?
         # # (bs, n * ns, nbhd_size, h), (bs, n * ns, nbhd_size, h, c_out / h) -> (bs, n * ns, nbhd_size, h)
-        # coset_functions = (attention_weights.unsqueeze(-1) * nbhd_coset_functions).sum(
-        #     dim=2
-        # )
-        # coset_functions = rearrange(coset_functions, "b n h d -> b n (h d)")
+        # coset_functions_1 = (
+        #     attention_weights.unsqueeze(-1) * nbhd_coset_functions
+        # ).sum(dim=2)
+        # coset_functions_1 = rearrange(coset_functions_1, "b n h d -> b n (h d)")
 
         attention_weights_expanded = torch.zeros(
             (bs, n, n, self.n_heads),
@@ -551,7 +551,6 @@ class EquivariantTransformer(nn.Module):
         architecture="model_1",
         attention_fn="softmax",  # softmax or dot product? SZ: TODO: "dot product" is used to describe both the attention weights being non-softmax (non-local attention paper) and the feature kernel. should fix terminology
         feature_embed_dim=None,
-        amp=False,
     ):
         super().__init__()
 
@@ -637,13 +636,7 @@ class EquivariantTransformer(nn.Module):
                     OrderedDict(
                         [
                             # ("norm", Pass(norm, dim=1)),
-                            (
-                                "activation",
-                                Pass(
-                                    activation_fn[kernel_act](),
-                                    dim=1,
-                                ),
-                            ),
+                            ("activation", Pass(activation_fn[kernel_act](), dim=1,),),
                             (
                                 "linear",
                                 Pass(nn.Linear(dim_hidden[-1], dim_output), dim=1),
@@ -672,11 +665,8 @@ class EquivariantTransformer(nn.Module):
 
         self.group = group
         self.liftsamples = liftsamples
-        self.amp = amp
 
     def forward(self, input):
         lifted_data = self.group.lift(input, self.liftsamples)
-
-        with torch.cuda.amp.autocast(enabled=self.amp):
-            return self.net(lifted_data)
+        return self.net(lifted_data)
 
