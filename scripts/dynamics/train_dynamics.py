@@ -133,10 +133,11 @@ flags.DEFINE_boolean("clip_grad_norm", False, 'Clip norm of the gradient at max_
 flags.DEFINE_integer("max_grad_norm", 100, "Maximum norm of gradient when clip_grad_norm is True.")
 
 # GPU device
-flags.DEFINE_integer("device", 2, "GPU to use.")
+flags.DEFINE_integer("device", 0, "GPU to use.")
 
 # Debug mode tracks more stuff
 flags.DEFINE_boolean("debug", True, "Track and show on tensorboard more metrics.")
+flags.DEFINE_boolean("kill_if_poor", False, "Kills run if loss is poor. Exact params to be set below.")
 
 #####################################################################################################################
 
@@ -158,7 +159,7 @@ def main():
 
     train_loader = dataloaders["train"]
     test_loader = dataloaders["test"]
-    # val_loader = dataloaders['val']
+    val_loader = dataloaders['val']
 
     # Load model
     model, model_name = fet.load(config.model_config, config)
@@ -177,30 +178,40 @@ def main():
         ("model_seed", "mseed"),
         ("lr_schedule", "lrsched"),
         ("layer_norm", "ln"),
-        ("batch_norm_att", "bnatt"),
         ("batch_norm", "bn"),
-        ("batch_norm_final_mlp", "bnfinalmlp"),
-        ("k", "k")
+        ("k", "k"),
+        ("attention_fn", "attfn"),
+        ("output_mlp_scale", "mlpscale"),
+        ("train_epochs", "epochs"),
+        ("block_norm", "block"),
+        ("kernel_type", "ktype"),
+        ("architecture", "arch"),
+        ("activation_function", "act"),
+        ("space_dim", "spacedim"),
+        ("num_particles", "prtcls"),
+        ("n_train", "ntrain"),
     ]
 
-    run_name = config.run_name
+    run_name = ""#config.run_name
     for config_param in params_in_run_name:
         attr = config_param[0]
         abbrev = config_param[1]
 
         if hasattr(config, attr):
-            run_name += ("_" + abbrev)
+            run_name += (abbrev)
             run_name += str(getattr(config, attr))
+            run_name += "_"
 
     if config.clip_grad_norm:
         run_name += (
-            "_clipnorm"
-            + str(config.max_grad_norm)
+            "clipnorm"
+            + str(config.max_grad_norm) + "_"
         )
 
     results_folder_name = osp.join(
         data_name,
         model_name,
+        config.run_name,
         run_name,
     )
 
@@ -257,6 +268,7 @@ def main():
 
     train_reports = []
     report_all = {}
+    report_all_val = {}
     # Saving model at epoch 0 before training
     print("saving model at epoch 0 before training ... ")
     save_checkpoint(checkpoint_name, 0, model, model_opt, loss=0.0)
@@ -279,6 +291,10 @@ def main():
 
     # Training
     start_t = time.time()
+
+    total_train_iters = len(train_loader) * config.train_epochs
+    iters_per_eval = int(total_train_iters / 100) # evaluate 100 times over the course of training
+
 
     grad_flows = []
     training_failed = False
@@ -364,19 +380,19 @@ def main():
                             pass
 
                     # weights norm
-                    if config.model_config == 'configs/dynamics/eqv_transformer_model.py':
-                        model_norms = {}
-                        for comp_name in model_components:
-                            comp = get_component(model.predictor.net, comp_name)
-                            norm = get_average_norm(comp)
-                            model_norms[comp_name[2]] = norm
+                    # if config.model_config == 'configs/dynamics/eqv_transformer_model.py':
+                    #     model_norms = {}
+                    #     for comp_name in model_components:
+                    #         comp = get_component(model.predictor.net, comp_name)
+                    #         norm = get_average_norm(comp)
+                    #         model_norms[comp_name[2]] = norm
 
-                        log_tensorboard(
-                            summary_writer,
-                            train_iter,
-                            model_norms,
-                            "debug/avg_model_norms/",
-                        )
+                    #     log_tensorboard(
+                    #         summary_writer,
+                    #         train_iter,
+                    #         model_norms,
+                    #         "debug/avg_model_norms/",
+                    #     )
 
                     # Average V size:
                     (z0, sys_params, ts), true_zs = data
@@ -408,7 +424,7 @@ def main():
                     max_grads= []
                     layers = []
                     for n, p in model.named_parameters():
-                        if (p.requires_grad) and ("bias" not in n):
+                        if (p.requires_grad) and (p.grad is not None): # and ("bias" not in n): # SZ: let's track bias grads too
                             layers.append(n)
                             ave_grads.append(p.grad.abs().mean().item())
                             max_grads.append(p.grad.abs().max().item())
@@ -419,7 +435,7 @@ def main():
                 model.train()
 
             # Logging
-            if batch_idx % config.evaluate_every == 0:
+            if train_iter % iters_per_eval == 0 or (train_iter == total_train_iters): #batch_idx % config.evaluate_every == 0:
                 model.eval()
                 with torch.no_grad():
 
@@ -463,6 +479,52 @@ def main():
                         prefix="test",
                     )
 
+                    if config.kill_if_poor:
+                        if epoch > config.train_epochs * 0.2:
+                            if reports['mse'] > 0.01:
+                                raise RuntimeError(f"Killed run due to poor performance.")
+
+                    # repeat for validation data
+                    reports = None
+                    for data in val_loader:
+                        data = nested_to(data, device, torch.float32)
+                        outputs = model(data)
+
+                        if reports is None:
+                            reports = {
+                                k: v.detach().clone().cpu()
+                                for k, v in outputs.reports.items()
+                            }
+                        else:
+                            for k, v in outputs.reports.items():
+                                reports[k] += v.detach().clone().cpu()
+
+                    for k, v in reports.items():
+                        reports[k] = v / len(
+                            val_loader
+                        )  # SZ: note this is slightly incorrect since mini-batch sizes can vary (if batch_size doesn't divide train_size), but approximately correct.
+
+                    reports = parse_reports(reports)
+                    reports["time"] = time.time() - start_t
+                    if report_all_val == {}:
+                        report_all_val = deepcopy(reports)
+
+                        for d in reports.keys():
+                            report_all_val[d] = [report_all_val[d]]
+                    else:
+                        for d in reports.keys():
+                            report_all_val[d].append(reports[d])
+
+                    log_tensorboard(summary_writer, train_iter, reports, "val/")
+                    print_reports(
+                        reports,
+                        start_t,
+                        epoch,
+                        batch_idx,
+                        len(train_loader.dataset) // config.batch_size,
+                        prefix="val",
+                    )
+
                 model.train()
 
             train_iter += 1
@@ -481,6 +543,7 @@ def main():
 
         dd.io.save(logdir + "/results_dict_train.h5", train_reports)
         dd.io.save(logdir + "/results_dict.h5", report_all)
+        dd.io.save(logdir + "/results_dict_val.h5", report_all_val)
 
     # always save final model
     save_checkpoint(checkpoint_name, train_iter, model, model_opt, loss=outputs.loss)
