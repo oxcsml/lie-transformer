@@ -111,25 +111,39 @@ def main():
     print(model)
 
     # Prepare environment
-    run_name = (
-        config.run_name
-        + "_bs"
-        + str(config.batch_size)
-        + "_lr"
-        + str(config.learning_rate)
-        + "_reps"
-        + str(config.patterns_reps)
-        + "_nheads" 
-        + str(config.num_heads)
-        + "_nlayers" 
-        + str(config.num_layers)
-        + "_hdim" 
-        + str(config.dim_hidden)
-        + "_kdim" 
-        + str(config.kernel_dim)
-        + "_nsamples" 
-        + str(config.lift_samples)
-    )
+
+    if 'set_transformer' in config.model_config:
+            run_name = (
+            config.run_name
+            + "_bs"
+            + str(config.batch_size)
+            + "_lr"
+            + str(config.learning_rate)
+            + "_reps"
+            + str(config.patterns_reps)
+            + "_nheads"
+            + str(config.num_heads)
+        )
+    else:
+        run_name = (
+            config.run_name
+            + "_bs"
+            + str(config.batch_size)
+            + "_lr"
+            + str(config.learning_rate)
+            + "_reps"
+            + str(config.patterns_reps)
+            + "_nheads"
+            + str(config.num_heads)
+            + "_nlayers" 
+            + str(config.num_layers)
+            + "_hdim"
+            + str(config.dim_hidden)
+            + "_kdim"
+            + str(config.kernel_dim)
+            + "_nsamples"
+            + str(config.lift_samples)
+        )
 
     results_folder_name = osp.join(data_name, model_name, run_name,)
 

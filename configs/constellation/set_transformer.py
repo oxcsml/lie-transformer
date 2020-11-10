@@ -13,7 +13,7 @@ flags.DEFINE_integer("n_outputs", 4, "Number of output vectors.")
 flags.DEFINE_integer("output_dim", 3, "Dimensionality of the output.")
 flags.DEFINE_integer("n_enc_layers", 4, "Number of encoder layers.")
 flags.DEFINE_integer("n_dec_layers", 4, "Number of encoder layers.")
-flags.DEFINE_integer("n_heads", 4, "Number of attention heads.")
+flags.DEFINE_integer("num_heads", 4, "Number of attention heads.")
 flags.DEFINE_integer(
     "n_inducing_points",
     0,
@@ -31,7 +31,7 @@ def load(config, **unused_kwargs):
         config.output_dim,
         n_enc_layers=config.n_enc_layers,
         n_dec_layers=config.n_dec_layers,
-        num_heads=config.n_heads,
+        num_heads=config.num_heads,
         num_inducing_points=config.n_inducing_points,
         ln=config.layer_norm,
     )
