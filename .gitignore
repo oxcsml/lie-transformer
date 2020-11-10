@@ -123,3 +123,5 @@ ckpt.store
 
 # sheh's stuff
 sheh_scripts/
+outputs/
+datasets/
