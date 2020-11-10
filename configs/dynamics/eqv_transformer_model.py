@@ -15,7 +15,6 @@ flags.DEFINE_integer("dim_hidden", 256, "Dimension of features to use in each la
 flags.DEFINE_string(
     "activation_function", "swish", "Activation function to use in the network"
 )
-flags.DEFINE_boolean("layer_norm", True, "Use layer norm in the layers")
 flags.DEFINE_boolean(
     "mean_pooling",
     True,
@@ -23,7 +22,6 @@ flags.DEFINE_boolean(
 )
 flags.DEFINE_integer("num_heads", 8, "Number of attention heads in each layer")
 flags.DEFINE_integer("kernel_dim", 16, "Hidden layer size to use in kernel MLPs")
-flags.DEFINE_boolean("batch_norm", False, "Use batch norm in the kernel MLPs")
 flags.DEFINE_integer("num_layers", 4, "Number of ResNet layers to use")
 flags.DEFINE_integer(
     "lift_samples",
@@ -31,23 +29,19 @@ flags.DEFINE_integer(
     "Number of coset lift samples to use for non-trivial stabilisers.",
 )
 flags.DEFINE_integer("model_seed", 0, "Model rng seed")
-
-flags.DEFINE_boolean(
-    "location_attention", True, "Use location kernel for attention weights."
-)
 flags.DEFINE_string(
-    "attention_fn", "softmax", "How to form the attention weights from the 'logits'."
+    "attention_fn", "norm_exp", "How to form the attention weights from the 'logits'."
 )
-flags.DEFINE_boolean(
-    "batch_norm_att",
-    False,
-    "Use batch norm instead of layer norm in each attention layer",
+
+flags.DEFINE_string(
+    "block_norm", "layer_pre", "Normalization to use around the attention blocks."
 )
-flags.DEFINE_boolean(
-    "batch_norm_final_mlp",
-    True,
-    "Use batch norm before non-linearities in the last MLP after pooling.",
-)
+flags.DEFINE_string("output_norm", "none", "Normalization to use in final output MLP.")
+flags.DEFINE_string("kernel_norm", "none", "Normalization to use in kernel MLP.")
+flags.DEFINE_string("kernel_type", "mlp", "Attention kernel type.")
+flags.DEFINE_string("architecture", "model_1", "Overall model architecture.")
+# flags.DEFINE_string("attention_fn", "softmax", "How to form attention weights.")
+# flags.DEFINE_float("output_mlp_scale", 1., "Scale the weights of the final MLP layers (to have a sufficiently large output to match input).")
 
 
 class DynamicsEquivariantTransformer(EquivariantTransformer, HNet):
@@ -78,32 +72,41 @@ def load(config, **unused_kwargs):
 
     if config.group == "T(2)":
         group = T(2)
+    elif config.group == "T(3)":
+        group = T(3)
     else:
         raise NotImplementedError(f"Group {config.group} is not implemented.")
 
     torch.manual_seed(config.model_seed)  # TODO: initialization seed
     network = DynamicsEquivariantTransformer(
         group=group,
-        dim_input=config.space_dim,
+        dim_input=config.sys_dim,
         dim_output=1,  # Potential term in Hamiltonian is scalar
         dim_hidden=config.dim_hidden,
         num_layers=config.num_layers,
         num_heads=config.num_heads,
-        layer_norm=config.layer_norm,
+        # layer_norm=config.layer_norm,
         global_pool=True,
         global_pool_mean=config.mean_pooling,
         liftsamples=config.lift_samples,
         kernel_dim=config.kernel_dim,
         kernel_act=config.activation_function,
-        batch_norm=config.batch_norm,
-        batch_norm_att=config.batch_norm_att,
-        batch_norm_final_mlp=config.batch_norm_final_mlp,
-        location_attention=config.location_attention,
+        block_norm=config.block_norm,
+        output_norm=config.output_norm,
+        kernel_norm=config.kernel_norm,
+        kernel_type=config.kernel_type,
+        architecture=config.architecture,
         attention_fn=config.attention_fn,
+        # output_mlp_scale=config.output_mlp_scale,
     )
 
-    dynamics_predictor = DynamicsPredictor(network, debug=config.debug)
+    if config.data_config == "configs/dynamics/nbody_dynamics_data.py":
+        task = "nbody"
+    elif config.data_config == "configs/dynamics/spring_dynamics_data.py":
+        task = "spring"
 
-    print(list(network.parameters())[0][:2])
+    dynamics_predictor = DynamicsPredictor(network, debug=config.debug, task=task)
+
+    # print(list(network.parameters())[0][:2])
 
     return dynamics_predictor, "EqvTransformer_Dynamics"
