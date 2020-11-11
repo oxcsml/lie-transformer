@@ -106,15 +106,15 @@ flags.DEFINE_boolean(
     "produce initialisation activation histograms the activations of specified modules through training",
 )
 flags.DEFINE_boolean("profile_model", False, "Run profiling code on model and exit")
-flags.DEFINE_boolean("amp", False, "Use automatic mixed precision training")
 flags.DEFINE_float(
     "lr_floor", 0, "minimum multiplicative factor of the learning rate in annealing"
 )
 flags.DEFINE_float(
     "warmup_length", 0.01, "fraction of the training time to use for warmup"
 )
-flags.DEFINE_bool("half_precision", False, "Train model with float16s")
-
+flags.DEFINE_bool(
+    "find_spikes", False, "Find big spikes in validation loss and save checkpoints"
+)
 #####################################################################################################################
 
 
@@ -154,12 +154,6 @@ def main():
     if config.lr_schedule != "none":
         run_name += "_" + config.lr_schedule
 
-    # if config.block_norm != "none":
-    #     run_name += "_" + config.block_norm
-
-    # if config.kernel_norm != "none":
-    #     run_name += "_" + config.kernel_norm
-
     # Print flags
     fet.print_flags()
 
@@ -171,32 +165,16 @@ def main():
         model_params,
         lr=opt_learning_rate,
         betas=(config.beta1, config.beta2),
-        eps=1e-4 if config.half_precision else 1e-8,
+        eps=1e-8,
     )
     # model_opt = torch.optim.SGD(model_params, lr=opt_learning_rate)
 
     # Cosine annealing learning rate
     if config.lr_schedule == "cosine":
-        # num_warmup_epochs = int(0.05 * config.train_epochs)
-        # num_warmup_steps = num_warmup_epochs
-        # num_training_steps = config.train_epochs
-        # lr_schedule = transformers.get_cosine_schedule_with_warmup(
-        #     model_opt,
-        #     num_warmup_steps=num_warmup_steps,
-        #     num_training_steps=num_training_steps,
-        # )
         cos = cosLr(config.train_epochs)
         lr_sched = lambda e: max(cos(e), config.lr_floor * config.learning_rate)
         lr_schedule = optim.lr_scheduler.LambdaLR(model_opt, lr_sched)
     elif config.lr_schedule == "cosine_warmup":
-        # num_warmup_epochs = int(0.05 * config.train_epochs)
-        # num_warmup_steps = num_warmup_epochs
-        # num_training_steps = config.train_epochs
-        # lr_schedule = transformers.get_cosine_schedule_with_warmup(
-        #     model_opt,
-        #     num_warmup_steps=num_warmup_steps,
-        #     num_training_steps=num_training_steps,
-        # )
         cos = cosLr(config.train_epochs)
         lr_sched = lambda e: max(
             min(e / (config.warmup_length * config.train_epochs), 1) * cos(e),
@@ -218,9 +196,6 @@ def main():
         raise ValueError(
             f"{config.lr_schedule} is not a recognised learning rate schedule"
         )
-
-    if config.half_precision:
-        model.half()
 
     num_params = param_count(model)
     if config.parameter_count:
@@ -259,15 +234,6 @@ def main():
             torch.cuda.empty_cache()
             memory_allocations.append(torch.cuda.memory_reserved() / 1024 / 1024 / 1024)
             outputs.loss.backward()
-
-            # print(
-            #     "%i torch.cuda.memory_allocated: %0.4fGB"
-            #     % (batch_idx, torch.cuda.memory_allocated() / 1024 / 1024 / 1024)
-            # )
-            # print(
-            #     "%i torch.cuda.memory_reserved:  %0.4fGB"
-            #     % (batch_idx, torch.cuda.memory_reserved() / 1024 / 1024 / 1024)
-            # )
 
         print(f"max memory reserved in one pass: {max(memory_allocations):0.4}GB")
         sys.exit(0)
@@ -346,10 +312,6 @@ def main():
         activations = {}
 
         def save_activation(name, mod, inpt, otpt):
-            # print(name)
-            # print(len(inpt))
-            # print(len(otpt))
-
             if isinstance(inpt, tuple):
                 if isinstance(inpt[0], list) | isinstance(inpt[0], tuple):
                     activations[name + "_inpt"] = inpt[0][1].detach().cpu()
@@ -377,10 +339,9 @@ def main():
 
     # Training
     start_t = time.perf_counter()
-    if config.log_train_values:
-        train_emas = ExponentialMovingAverage(alpha=config.ema_alpha, debias=True)
 
     iters_per_epoch = len(dataloaders["train"])
+    last_valid_loss = 1000.0
     for epoch in tqdm(range(start_epoch, config.train_epochs + 1)):
         model.train()
 
@@ -428,6 +389,7 @@ def main():
                         data = {k: v.to(device) for k, v in data.items()}
                         outputs = model(data, compute_loss=True)
                         valid_mae = valid_mae + outputs.mae
+                model.train()
 
                 outputs["reports"].valid_mae = valid_mae / len(dataloaders["valid"])
 
@@ -443,6 +405,21 @@ def main():
                     len(dataloaders["train"].dataset) // config.batch_size,
                     prefix="valid",
                 )
+
+                loss_diff = (
+                    last_valid_loss - (valid_mae / len(dataloaders["valid"])).item()
+                )
+                if loss_diff and config.find_spikes < -0.1:
+                    save_checkpoint(
+                        checkpoint_name + "_spike",
+                        epoch,
+                        model,
+                        model_opt,
+                        lr_schedule,
+                        outputs.loss,
+                    )
+
+                last_valid_loss = (valid_mae / len(dataloaders["valid"])).item()
 
             train_iter += 1
 
