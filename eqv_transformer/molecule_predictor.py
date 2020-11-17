@@ -42,6 +42,7 @@ class MoleculePredictor(nn.Module):
 
             target_norm = (target - meadian) / mad
             prediction_actual = o.prediction * mad + meadian
+            o.prediction_actual = prediction_actual
 
             o.loss = (o.prediction - target_norm).abs().mean()
             o.mae = (prediction_actual - target).abs().mean()

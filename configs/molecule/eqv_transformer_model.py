@@ -67,6 +67,11 @@ flags.DEFINE_integer(
     None,
     "Dimensionality of the embedding of the features for each head. Only used by some kernels",
 )
+flags.DEFINE_float(
+    "max_sample_norm",
+    None,
+    "Maximum sample norm to allow through the lifting stage to prevent numerical issues.",
+)
 
 
 class MoleculeEquivariantTransformer(EquivariantTransformer):
@@ -77,7 +82,7 @@ class MoleculeEquivariantTransformer(EquivariantTransformer):
         self.random_rotate = SE3aug()
 
     def featurize(self, mb):
-        charges = mb["charges"].to(mb["A"].dtype) / self.charge_scale.to(mb["A"].dtype)
+        charges = mb["charges"].to(mb["A"].dtype) / self.charge_scale
         c_vec = torch.stack(
             [torch.ones_like(charges), charges, charges ** 2], dim=-1
         )  #
@@ -136,15 +141,13 @@ def load(config, **unused_kwargs):
         mc_samples=config.mc_samples,
         attention_fn=config.attention_fn,
         feature_embed_dim=config.feature_embed_dim,
-        amp=config.amp,
+        max_sample_norm=config.max_sample_norm,
     )
 
     # predictor.net[-1][-1].weight.data = predictor.net[-1][-1].weight * (0.205 / 0.005)
     # predictor.net[-1][-1].bias.data = predictor.net[-1][-1].bias - (0.196 + 0.40)
 
-    molecule_predictor = MoleculePredictor(
-        predictor, config.task, config.ds_stats, amp=config.amp
-    )
+    molecule_predictor = MoleculePredictor(predictor, config.task, config.ds_stats)
 
     return (
         molecule_predictor,

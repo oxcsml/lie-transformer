@@ -551,6 +551,7 @@ class EquivariantTransformer(nn.Module):
         architecture="model_1",
         attention_fn="softmax",  # softmax or dot product? SZ: TODO: "dot product" is used to describe both the attention weights being non-softmax (non-local attention paper) and the feature kernel. should fix terminology
         feature_embed_dim=None,
+        max_sample_norm=None,
     ):
         super().__init__()
 
@@ -665,8 +666,19 @@ class EquivariantTransformer(nn.Module):
 
         self.group = group
         self.liftsamples = liftsamples
+        self.max_sample_norm = max_sample_norm
 
     def forward(self, input):
-        lifted_data = self.group.lift(input, self.liftsamples)
+        if self.max_sample_norm is None:
+            lifted_data = self.group.lift(input, self.liftsamples)
+        else:
+            lifted_data = [
+                torch.tensor(self.max_sample_norm * 2, device=input[0].device),
+                0,
+                0,
+            ]
+            while lifted_data[0].norm(dim=-1).max() > self.max_sample_norm:
+                lifted_data = self.group.lift(input, self.liftsamples)
+
         return self.net(lifted_data)
 
