@@ -12,6 +12,7 @@ import forge
 from forge import flags
 import forge.experiment_tools as fet
 from copy import deepcopy
+from tqdm import tqdm
 import deepdish as dd
 from itertools import chain
 
@@ -90,7 +91,7 @@ flags.DEFINE_boolean("debug", True, "Track and show on tensorboard more metrics.
 #####################################################################################################################
 
 
-@forge.debug_on(Exception)
+# @forge.debug_on(Exception)
 def main():
     # Parse flags
     config = forge.config()
@@ -110,28 +111,74 @@ def main():
     model = model.to(device)
     print(model)
 
+    # # Prepare environment
+    # run_name = (
+    #     config.run_name
+    #     + "_bs"
+    #     + str(config.batch_size)
+    #     + "_lr"
+    #     + str(config.learning_rate)
+    #     + "_reps"
+    #     + str(config.patterns_reps)
+    #     + "_nheads" 
+    #     + str(config.num_heads)
+    #     + "_nlayers" 
+    #     + str(config.num_layers)
+    #     + "_hdim" 
+    #     + str(config.dim_hidden)
+    #     + "_kdim" 
+    #     + str(config.kernel_dim)
+    #     + "_nsamples" 
+    #     + str(config.lift_samples)
+    # )
+
     # Prepare environment
-    run_name = (
-        config.run_name
-        + "_bs"
-        + str(config.batch_size)
-        + "_lr"
-        + str(config.learning_rate)
-        + "_reps"
-        + str(config.patterns_reps)
-        + "_nheads" 
-        + str(config.num_heads)
-        + "_nlayers" 
-        + str(config.num_layers)
-        + "_hdim" 
-        + str(config.dim_hidden)
-        + "_kdim" 
-        + str(config.kernel_dim)
-        + "_nsamples" 
-        + str(config.lift_samples)
+    params_in_run_name = [
+        ("batch_size", "bs"),
+        ("learning_rate", "lr"),
+        ("num_heads", "nheads"),
+        ("num_layers", "nlayers"),
+        ("dim_hidden", "hdim"),
+        ("kernel_dim", "kdim"), 
+        ("location_attention", "locatt"),
+        ("model_seed", "mseed"),
+        ("lr_schedule", "lrsched"),
+        ("layer_norm", "ln"),
+        ("batch_norm_att", "bnatt"),
+        ("batch_norm", "bn"),
+        ("batch_norm_final_mlp", "bnfinalmlp"),
+        ("k", "k"),
+        ("attention_fn", "attfn"),
+        ("output_mlp_scale", "mlpscale"),
+        ("train_epochs", "epochs"),
+        ("block_norm", "block"),
+        ("kernel_type", "ktype"),
+        ("architecture", "arch"),
+        ("kernel_act", "actv"),
+        ("patterns_reps", "reps"),
+        ("lift_samples", "nsamples"),
+        ("content_type", "content"),
+    ]
+
+    run_name = ""#config.run_name
+    for config_param in params_in_run_name:
+        attr = config_param[0]
+        abbrev = config_param[1]
+
+        if hasattr(config, attr):
+            run_name += (abbrev)
+            run_name += str(getattr(config, attr))
+            run_name += "_"
+
+
+    results_folder_name = osp.join(
+        data_name,
+        model_name,
+        config.run_name,
+        run_name,
     )
 
-    results_folder_name = osp.join(data_name, model_name, run_name,)
+    # results_folder_name = osp.join(data_name, model_name, run_name,)
 
     logdir = osp.join(config.results_dir, results_folder_name.replace(".", "_"))
     logdir, resume_checkpoint = fet.init_checkpoint(
@@ -192,12 +239,20 @@ def main():
     start_t = time.time()
 
     grad_flows = []
-    for epoch in range(start_epoch, config.train_epochs + 1):
+    training_failed = False
+    for epoch in tqdm(range(start_epoch, config.train_epochs + 1)):
         model.train()
 
         for batch_idx, data in enumerate(train_loader):
             data, presence, target = [d.to(device) for d in data]
             outputs = model([data, presence], target)
+
+            if torch.isnan(outputs.loss):
+                if not training_failed:
+                    epoch_of_nan = epoch
+                if (epoch > epoch_of_nan + 1) and training_failed:
+                    raise ValueError("Loss Nan-ed.")
+                training_failed = True
 
             model_opt.zero_grad()
             outputs.loss.backward(retain_graph=False)
@@ -247,20 +302,20 @@ def main():
                         except AttributeError:
                             pass
 
-                    # weights norm
-                    if config.model_config == 'configs/constellation/eqv_transformer_model.py':
-                        model_norms = {}
-                        for comp_name in model_components:
-                            comp = get_component(model.encoder.net, comp_name)
-                            norm = get_average_norm(comp)
-                            model_norms[comp_name[2]] = norm
+                    # # weights norm
+                    # if config.model_config == 'configs/constellation/eqv_transformer_model.py':
+                    #     model_norms = {}
+                    #     for comp_name in model_components:
+                    #         comp = get_component(model.encoder.net, comp_name)
+                    #         norm = get_average_norm(comp)
+                    #         model_norms[comp_name[2]] = norm
 
-                        log_tensorboard(
-                            summary_writer,
-                            train_iter,
-                            model_norms,
-                            "debug/avg_model_norms/",
-                        )
+                    #     log_tensorboard(
+                    #         summary_writer,
+                    #         train_iter,
+                    #         model_norms,
+                    #         "debug/avg_model_norms/",
+                    #     )
 
                     log_tensorboard(
                         summary_writer,
@@ -273,23 +328,24 @@ def main():
                     )
                     prev_params = curr_params
 
-                    # gradient flow
-                    ave_grads = []
-                    max_grads= []
-                    layers = []
-                    for n, p in model.named_parameters():
-                        if (p.requires_grad): # and ("bias" not in n):
-                            layers.append(n)
-                            ave_grads.append(p.grad.abs().mean().item())
-                            max_grads.append(p.grad.abs().max().item())
+                    # # gradient flow
+                    # ave_grads = []
+                    # max_grads= []
+                    # layers = []
+                    # for n, p in model.named_parameters():
+                    #     if (p.requires_grad) and (p.grad is not None): # and ("bias" not in n):
+                    #         layers.append(n)
+                    #         ave_grads.append(p.grad.abs().mean().item())
+                    #         max_grads.append(p.grad.abs().max().item())
 
-                    grad_flow = {"layers": layers, "ave_grads": ave_grads, "max_grads": max_grads}
-                    grad_flows.append(grad_flow)
+                    # grad_flow = {"layers": layers, "ave_grads": ave_grads, "max_grads": max_grads}
+                    # grad_flows.append(grad_flow)
 
                 model.train()
 
             # Logging
             if batch_idx % config.evaluate_every == 0:
+                model.eval()
                 with torch.no_grad():
                     reports = None
                     for data in test_loader:
@@ -329,6 +385,8 @@ def main():
                         prefix="test",
                     )
 
+                model.train()
+
             train_iter += 1
 
         if epoch % config.save_check_points == 0:
@@ -339,8 +397,8 @@ def main():
         dd.io.save(logdir + '/results_dict_train.h5', train_reports)
         dd.io.save(logdir + "/results_dict.h5", report_all)
 
-        if config.debug:
-            dd.io.save(logdir + "/grad_flows.h5", grad_flows)
+        # if config.debug:
+        #     # dd.io.save(logdir + "/grad_flows.h5", grad_flows)
 
     save_checkpoint(
         checkpoint_name, train_iter, model, model_opt, loss=outputs.loss

@@ -25,6 +25,7 @@ from eqv_transformer.train_tools import (
     log_reports,
     load_checkpoint,
     save_checkpoint,
+    delete_checkpoint,
     ExponentialMovingAverage,
     get_component,
     nested_to,
@@ -115,6 +116,12 @@ flags.DEFINE_float(
 flags.DEFINE_bool(
     "find_spikes", False, "Find big spikes in validation loss and save checkpoints"
 )
+flags.DEFINE_boolean(
+    "only_store_last_checkpoint",
+    False,
+    "If True, deletes last checkpoint when saving current checkpoint",
+)
+
 #####################################################################################################################
 
 
@@ -547,6 +554,8 @@ def main():
             save_checkpoint(
                 checkpoint_name, epoch, model, model_opt, lr_schedule, outputs.loss,
             )
+            if config.only_store_last_checkpoint:
+                delete_checkpoint(checkpoint_name, epoch - config.save_check_points)
 
     save_checkpoint(
         checkpoint_name, "final", model, model_opt, lr_schedule, outputs.loss,
