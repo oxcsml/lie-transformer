@@ -121,6 +121,11 @@ flags.DEFINE_boolean(
     False,
     "If True, deletes last checkpoint when saving current checkpoint",
 )
+flags.DEFINE_boolean(
+    "clip_grad",
+    False,
+    "If True, clip gradient L2-norms at 1.",
+)
 
 #####################################################################################################################
 
@@ -359,6 +364,9 @@ def main():
             outputs = model(data, compute_loss=True)
 
             outputs.loss.backward()
+            if config.clip_grad:
+                # Clip gradient L2-norm at 1
+                torch.nn.utils.clip_grad.clip_grad_norm_(model.predictor.parameters(), 1.)
             model_opt.step()
 
             if config.init_activations:
