@@ -105,7 +105,13 @@ def load_checkpoint(checkpoint_path, model, opt=None, lr_sched=None):
     if checkpoint["epoch"] == "final":
         checkpoint["epoch"] = 0
     start_epoch = checkpoint["epoch"] + 1
-    return start_epoch
+
+    if hasattr(checkpoint, "loss"):
+        loss = checkpoint["loss"]
+    else:
+        loss = None
+
+    return start_epoch, loss
 
 
 def save_checkpoint(checkpoint_name, epoch, model, opt, lr_sched=None, loss=None):
@@ -226,4 +232,3 @@ def parameter_analysis(model):
             sum(p.numel() for p in model.parameters()) * 4 / (1024 ** 2),
         )
     )
-

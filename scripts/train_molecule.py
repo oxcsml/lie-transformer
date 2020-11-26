@@ -95,7 +95,9 @@ flags.DEFINE_float("learning_rate", 1e-5, "SGD learning rate.")
 flags.DEFINE_float("beta1", 0.5, "Adam Beta 1 parameter")
 flags.DEFINE_float("beta2", 0.9, "Adam Beta 2 parameter")
 flags.DEFINE_string(
-    "lr_schedule", "none", "What learning rate schedule to use. Options: cosine, none",
+    "lr_schedule",
+    "none",
+    "What learning rate schedule to use. Options: cosine, none",
 )
 flags.DEFINE_boolean(
     "parameter_count", False, "If True, print model parameter count and exit"
@@ -223,7 +225,13 @@ def main():
         data = next(iter(dataloaders["train"]))
 
         data = {k: v.to(device) for k, v in data.items()}
-        print(summary(model.predictor, data, batch_size=config.batch_size,))
+        print(
+            summary(
+                model.predictor,
+                data,
+                batch_size=config.batch_size,
+            )
+        )
 
         parameters = sum(
             parameter.numel() for parameter in model.predictor.parameters()
@@ -254,7 +262,11 @@ def main():
         print(f"{model_name} parameters: {num_params:.5e}")
 
     # set up results folders
-    results_folder_name = osp.join(data_name, model_name, run_name,)
+    results_folder_name = osp.join(
+        data_name,
+        model_name,
+        run_name,
+    )
 
     logdir = osp.join(config.results_dir, results_folder_name.replace(".", "_"))
     logdir, resume_checkpoint = fet.init_checkpoint(
@@ -265,9 +277,12 @@ def main():
 
     # Try to restore model and optimizer from checkpoint
     if resume_checkpoint is not None:
-        start_epoch = load_checkpoint(resume_checkpoint, model, model_opt, lr_schedule)
+        start_epoch, best_test_mae = load_checkpoint(
+            resume_checkpoint, model, model_opt, lr_schedule
+        )
     else:
         start_epoch = 1
+        best_test_mae = 1e12
 
     train_iter = (start_epoch - 1) * (
         len(dataloaders["train"].dataset) // config.batch_size
@@ -366,7 +381,9 @@ def main():
             outputs.loss.backward()
             if config.clip_grad:
                 # Clip gradient L2-norm at 1
-                torch.nn.utils.clip_grad.clip_grad_norm_(model.predictor.parameters(), 1.)
+                torch.nn.utils.clip_grad.clip_grad_norm_(
+                    model.predictor.parameters(), 1.0
+                )
             model_opt.step()
 
             if config.init_activations:
@@ -560,13 +577,34 @@ def main():
         # Save a checkpoint
         if epoch % config.save_check_points == 0:
             save_checkpoint(
-                checkpoint_name, epoch, model, model_opt, lr_schedule, outputs.loss,
+                checkpoint_name,
+                epoch,
+                model,
+                model_opt,
+                lr_schedule,
+                best_test_mae,
             )
             if config.only_store_last_checkpoint:
                 delete_checkpoint(checkpoint_name, epoch - config.save_check_points)
 
+        if outputs["reports"].test_mae < best_test_mae:
+            save_checkpoint(
+                checkpoint_name,
+                "best_test_mae",
+                model,
+                model_opt,
+                lr_schedule,
+                best_test_mae,
+            )
+            best_test_mae = outputs["reports"].test_mae
+
     save_checkpoint(
-        checkpoint_name, "final", model, model_opt, lr_schedule, outputs.loss,
+        checkpoint_name,
+        "final",
+        model,
+        model_opt,
+        lr_schedule,
+        outputs.loss,
     )
 
 
