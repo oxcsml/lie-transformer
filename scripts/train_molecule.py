@@ -277,12 +277,12 @@ def main():
 
     # Try to restore model and optimizer from checkpoint
     if resume_checkpoint is not None:
-        start_epoch, best_test_mae = load_checkpoint(
+        start_epoch, best_valid_mae = load_checkpoint(
             resume_checkpoint, model, model_opt, lr_schedule
         )
     else:
         start_epoch = 1
-        best_test_mae = 1e12
+        best_valid_mae = 1e12
 
     train_iter = (start_epoch - 1) * (
         len(dataloaders["train"].dataset) // config.batch_size
@@ -453,6 +453,17 @@ def main():
 
                 last_valid_loss = (valid_mae / len(dataloaders["valid"])).item()
 
+                if outputs["reports"].valid_mae < best_valid_mae:
+                    save_checkpoint(
+                        checkpoint_name,
+                        "best_valid_mae",
+                        model,
+                        model_opt,
+                        lr_schedule,
+                        best_valid_mae,
+                    )
+                    best_valid_mae = outputs["reports"].valid_mae
+
             train_iter += 1
 
             # Step the LR schedule
@@ -582,21 +593,10 @@ def main():
                 model,
                 model_opt,
                 lr_schedule,
-                best_test_mae,
+                best_valid_mae,
             )
             if config.only_store_last_checkpoint:
                 delete_checkpoint(checkpoint_name, epoch - config.save_check_points)
-
-        if outputs["reports"].test_mae < best_test_mae:
-            save_checkpoint(
-                checkpoint_name,
-                "best_test_mae",
-                model,
-                model_opt,
-                lr_schedule,
-                best_test_mae,
-            )
-            best_test_mae = outputs["reports"].test_mae
 
     save_checkpoint(
         checkpoint_name,
