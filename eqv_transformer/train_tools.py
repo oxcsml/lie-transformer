@@ -87,7 +87,7 @@ def get_checkpoint_iter(checkpoint_iter, checkpoint_dir):
     return max(fet.find_model_files(checkpoint_dir).keys())
 
 
-def load_checkpoint(checkpoint_path, model, opt, lr_sched=None):
+def load_checkpoint(checkpoint_path, model, opt=None, lr_sched=None):
     print("Restoring checkpoint from '{}'".format(checkpoint_path))
     checkpoint = torch.load(checkpoint_path)
     # Restore model
