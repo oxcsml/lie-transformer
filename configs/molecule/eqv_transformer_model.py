@@ -72,6 +72,11 @@ flags.DEFINE_float(
     None,
     "Maximum sample norm to allow through the lifting stage to prevent numerical issues.",
 )
+flags.DEFINE_string(
+    "lie_algebra_nonlinearity",
+    None,
+    "Nonlinearity to apply to the norm of the lie algebra elements. Supported are None/tanh",
+)
 
 
 class MoleculeEquivariantTransformer(EquivariantTransformer):
@@ -142,6 +147,7 @@ def load(config, **unused_kwargs):
         attention_fn=config.attention_fn,
         feature_embed_dim=config.feature_embed_dim,
         max_sample_norm=config.max_sample_norm,
+        lie_algebra_nonlinearity=config.lie_algebra_nonlinearity,
     )
 
     # predictor.net[-1][-1].weight.data = predictor.net[-1][-1].weight * (0.205 / 0.005)

@@ -220,18 +220,18 @@ def main():
         print("============================================================")
         print(f"{model_name} parameters: {num_params:.5e}")
         print("============================================================")
-        from torchsummary import summary
+        # from torchsummary import summary
 
         data = next(iter(dataloaders["train"]))
 
         data = {k: v.to(device) for k, v in data.items()}
-        print(
-            summary(
-                model.predictor,
-                data,
-                batch_size=config.batch_size,
-            )
-        )
+        # print(
+        #     summary(
+        #         model.predictor,
+        #         data,
+        #         batch_size=config.batch_size,
+        #     )
+        # )
 
         parameters = sum(
             parameter.numel() for parameter in model.predictor.parameters()
@@ -251,9 +251,9 @@ def main():
 
             model_opt.zero_grad()
             outputs = model(data, compute_loss=True)
-            torch.cuda.empty_cache()
-            memory_allocations.append(torch.cuda.memory_reserved() / 1024 / 1024 / 1024)
-            outputs.loss.backward()
+            # torch.cuda.empty_cache()
+            # memory_allocations.append(torch.cuda.memory_reserved() / 1024 / 1024 / 1024)
+            # outputs.loss.backward()
 
         print(f"max memory reserved in one pass: {max(memory_allocations):0.4}GB")
         sys.exit(0)
