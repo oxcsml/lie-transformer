@@ -111,54 +111,45 @@ def main():
     model = model.to(device)
     print(model)
 
-    # # Prepare environment
-    # run_name = (
-    #     config.run_name
-    #     + "_bs"
-    #     + str(config.batch_size)
-    #     + "_lr"
-    #     + str(config.learning_rate)
-    #     + "_reps"
-    #     + str(config.patterns_reps)
-    #     + "_nheads" 
-    #     + str(config.num_heads)
-    #     + "_nlayers" 
-    #     + str(config.num_layers)
-    #     + "_hdim" 
-    #     + str(config.dim_hidden)
-    #     + "_kdim" 
-    #     + str(config.kernel_dim)
-    #     + "_nsamples" 
-    #     + str(config.lift_samples)
-    # )
-
     # Prepare environment
-    params_in_run_name = [
-        ("batch_size", "bs"),
-        ("learning_rate", "lr"),
-        ("num_heads", "nheads"),
-        ("num_layers", "nlayers"),
-        ("dim_hidden", "hdim"),
-        ("kernel_dim", "kdim"), 
-        ("location_attention", "locatt"),
-        ("model_seed", "mseed"),
-        ("lr_schedule", "lrsched"),
-        ("layer_norm", "ln"),
-        ("batch_norm_att", "bnatt"),
-        ("batch_norm", "bn"),
-        ("batch_norm_final_mlp", "bnfinalmlp"),
-        ("k", "k"),
-        ("attention_fn", "attfn"),
-        ("output_mlp_scale", "mlpscale"),
-        ("train_epochs", "epochs"),
-        ("block_norm", "block"),
-        ("kernel_type", "ktype"),
-        ("architecture", "arch"),
-        ("kernel_act", "actv"),
-        ("patterns_reps", "reps"),
-        ("lift_samples", "nsamples"),
-        ("content_type", "content"),
-    ]
+
+    if 'set_transformer' in config.model_config:
+            params_in_run_name = [
+            ("batch_size", "bs"),
+            ("learning_rate", "lr"),
+            ("num_heads", "nheads"),
+            ("patterns_reps", "reps"),
+            ("train_epochs", "epochs"),
+            
+            ]
+
+    else:
+        params_in_run_name = [
+            ("batch_size", "bs"),
+            ("learning_rate", "lr"),
+            ("num_heads", "nheads"),
+            ("num_layers", "nlayers"),
+            ("dim_hidden", "hdim"),
+            ("kernel_dim", "kdim"), 
+            ("location_attention", "locatt"),
+            ("model_seed", "mseed"),
+            ("lr_schedule", "lrsched"),
+            ("layer_norm", "ln"),
+            ("batch_norm_att", "bnatt"),
+            ("batch_norm", "bn"),
+            ("batch_norm_final_mlp", "bnfinalmlp"),
+            ("k", "k"),
+            ("attention_fn", "attfn"),
+            ("output_mlp_scale", "mlpscale"),
+            ("train_epochs", "epochs"),
+            ("block_norm", "block"),
+            ("kernel_type", "ktype"),
+            ("architecture", "arch"),
+            ("kernel_act", "actv"),
+            ("patterns_reps", "reps"),
+            ("lift_samples", "nsamples"),
+            ("content_type", "content"),
+        ]
 
     run_name = ""#config.run_name
     for config_param in params_in_run_name:
