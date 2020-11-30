@@ -18,8 +18,8 @@ import pickle
 import os
 import json
 
-flags.DEFINE_integer("train_size", 100000, "Number of training examples per epoch.")
-flags.DEFINE_integer("test_size", 10000, "Number of testing examples per epoch.")
+flags.DEFINE_integer("train_size", 10000, "Number of training examples per epoch.")
+flags.DEFINE_integer("test_size", 1000, "Number of testing examples per epoch.")
 flags.DEFINE_float("corner_noise", 0.1, "See `create_constellations`.")
 flags.DEFINE_boolean("shuffle_corners", True, "See `create_constellations`.")
 
