@@ -141,8 +141,8 @@ class EquivairantMultiheadAttention(nn.Module):
         self.output_linear = nn.Linear(c_out, c_out)
 
     def extract_neighbourhoods(self, input, query_indices=None):
-        """ Extracts which points each other point is to attend to based on distance, or graph structure
-        
+        """Extracts which points each other point is to attend to based on distance, or graph structure
+
 
         Parameters
         ----------
@@ -521,7 +521,11 @@ class GlobalPool(nn.Module):
             masked = torch.where(
                 mask.unsqueeze(-1),
                 vals,
-                torch.tensor(-1e38, dtype=vals.dtype, device=vals.device,)
+                torch.tensor(
+                    -1e38,
+                    dtype=vals.dtype,
+                    device=vals.device,
+                )
                 * torch.ones_like(vals),
             )
 
@@ -552,6 +556,7 @@ class EquivariantTransformer(nn.Module):
         attention_fn="softmax",  # softmax or dot product? SZ: TODO: "dot product" is used to describe both the attention weights being non-softmax (non-local attention paper) and the feature kernel. should fix terminology
         feature_embed_dim=None,
         max_sample_norm=None,
+        lie_algebra_nonlinearity=None,
     ):
         super().__init__()
 
@@ -637,7 +642,13 @@ class EquivariantTransformer(nn.Module):
                     OrderedDict(
                         [
                             # ("norm", Pass(norm, dim=1)),
-                            ("activation", Pass(activation_fn[kernel_act](), dim=1,),),
+                            (
+                                "activation",
+                                Pass(
+                                    activation_fn[kernel_act](),
+                                    dim=1,
+                                ),
+                            ),
                             (
                                 "linear",
                                 Pass(nn.Linear(dim_hidden[-1], dim_output), dim=1),
@@ -668,6 +679,15 @@ class EquivariantTransformer(nn.Module):
         self.liftsamples = liftsamples
         self.max_sample_norm = max_sample_norm
 
+        self.lie_algebra_nonlinearity = lie_algebra_nonlinearity
+        if lie_algebra_nonlinearity is not None:
+            if lie_algebra_nonlinearity == "tanh":
+                self.lie_algebra_nonlinearity = nn.Tanh()
+            else:
+                raise ValueError(
+                    f"{lie_algebra_nonlinearity} is not a supported nonlinearity"
+                )
+
     def forward(self, input):
         if self.max_sample_norm is None:
             lifted_data = self.group.lift(input, self.liftsamples)
@@ -680,5 +700,11 @@ class EquivariantTransformer(nn.Module):
             while lifted_data[0].norm(dim=-1).max() > self.max_sample_norm:
                 lifted_data = self.group.lift(input, self.liftsamples)
 
-        return self.net(lifted_data)
+        if self.lie_algebra_nonlinearity is not None:
+            lifted_data = list(lifted_data)
+            pairs_norm = lifted_data[0].norm(dim=-1) + 1e-6
+            lifted_data[0] = lifted_data[0] * (
+                self.lie_algebra_nonlinearity(pairs_norm / 7) / pairs_norm
+            ).unsqueeze(-1)
 
+        return self.net(lifted_data)
