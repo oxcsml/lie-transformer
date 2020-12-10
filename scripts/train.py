@@ -341,9 +341,9 @@ def main():
                     reports = None
                     for data in test_loader:
                         data, presence, target = [d.to(device) for d in data]
-                        if config.data_config == "configs/constellation/constellation.py":
-                            if config.global_rotation != 0.0:
-                                data = rotate(data, config.global_rotation)
+                        # if config.data_config == "configs/constellation/constellation.py":
+                            # if config.global_rotation_angle != 0.0:
+                                # data = rotate(data, config.global_rotation_angle)
                         outputs = model([data, presence], target)
                         
                         if reports is None:
