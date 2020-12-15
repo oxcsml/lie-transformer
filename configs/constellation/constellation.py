@@ -20,12 +20,14 @@ import json
 
 flags.DEFINE_integer("train_size", 10000, "Number of training examples per epoch.")
 flags.DEFINE_integer("test_size", 1000, "Number of testing examples per epoch.")
+flags.DEFINE_integer("naug", 2, "Number of augmentation.")
 flags.DEFINE_float("corner_noise", 0.1, "See `create_constellations`.")
 flags.DEFINE_boolean("shuffle_corners", True, "See `create_constellations`.")
 
 flags.DEFINE_float("pattern_upscale", 0.0, "See `create_constellations`.")
 flags.DEFINE_float("max_rotation", 0.33, "See `create_constellations`.")
-flags.DEFINE_float("global_rotation", 0.0, "See `create_constellations`.")
+flags.DEFINE_float("global_rotation_angle", 0.0, "See `create_constellations`.")
+flags.DEFINE_float("global_translation", 0.0, "See `create_constellations`.")
 flags.DEFINE_float("pattern_drop_prob", 0.5, "See `create_constellations`.")
 flags.DEFINE_integer("patterns_reps", 2, "See `create_constellations`.")
 flags.DEFINE_integer("data_seed", 0, "Seed for data generation.")
@@ -59,6 +61,8 @@ def create_constellations(
     shuffle_corners=True,
     gaussian_noise=0.0,
     max_translation=1.0,
+    global_translation=0.0,
+    global_rotation_angle=0.0,
     max_rot=0.0,
     max_upscale=0.0,
     which_patterns="all",
@@ -180,6 +184,11 @@ def create_constellations(
     # normalize corners
     min_d, max_d = capsules.min(), capsules.max()
     capsules = (capsules - min_d) / (max_d - min_d + 1e-8) * 2 - 1.0
+    if global_rotation_angle != 0.0:
+        rotation = np.array([[np.cos(global_rotation_angle), -np.sin(global_rotation_angle)], [np.sin(global_rotation_angle), np.cos(global_rotation_angle)]])
+        _, b, c = capsules.shape
+        capsules = np.matmul(rotation, capsules.reshape(b, c).transpose()).transpose().reshape(1, b, c)
+    capsules += global_translation 
 
     minibatch = dict(
         corners=capsules,
@@ -219,21 +228,18 @@ def create_dataset(gen_func, epoch_size, transform=None, keys=None, device=None)
 
 
 def load(config):
-
     train_path = os.path.join(
         config.data_dir,
         "constellation/train_{}_{}.pkl".format(config.train_size, config.patterns_reps),
     )
     test_path = os.path.join(
         config.data_dir,
-        "constellation/test_{}_{}.pkl".format(config.test_size, config.patterns_reps),
+        "constellation/test_{}_{}_{}.pkl".format(config.test_size, config.naug, config.patterns_reps),
     )
 
-    if tf.io.gfile.exists(train_path) and tf.io.gfile.exists(test_path):
+    if tf.io.gfile.exists(train_path):
         with tf.io.gfile.GFile(train_path, "rb") as f:
             trainset = pickle.load(f)
-        with tf.io.gfile.GFile(test_path, "rb") as f:
-            testset = pickle.load(f)
 
     else:
         gen_func = functools.partial(
@@ -253,14 +259,29 @@ def load(config):
             transform=lambda x: torch.tensor(x),
             keys=["corners", "presence", "pattern_class_count"],
         )
-
+        
+    if config.naug > = 2 and tf.io.gfile.exists(test_path):
+        print('Successfully reloaded test set')
+        print(test_path)
+        with tf.io.gfile.GFile(test_path, "rb") as f:
+            testset = pickle.load(f)
+    else:
+        gen_func = functools.partial(
+            create_constellations,
+            shuffle_corners=config.shuffle_corners,
+            gaussian_noise=config.corner_noise,
+            max_rot=config.max_rotation,
+            max_upscale=config.pattern_upscale,
+            drop_prob=config.pattern_drop_prob,
+            which_patterns=patterns(config.patterns_reps),
+            rng=np.random.RandomState(seed=config.data_seed),
+        )
         testset = create_dataset(
             gen_func,
             epoch_size=config.test_size,
             transform=lambda x: torch.tensor(x),
             keys=["corners", "presence", "pattern_class_count"],
         )
-
     train_loader = torch.utils.data.DataLoader(
         trainset,
         batch_size=config.batch_size,
