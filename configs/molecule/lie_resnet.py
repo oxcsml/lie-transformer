@@ -36,6 +36,11 @@ flags.DEFINE_integer(
     "lift_samples", 4, "Number of coset lift samples to use for non-trivial stabilisers"
 )
 flags.DEFINE_integer("model_seed", 0, "Model rng seed")
+flags.DEFINE_string(
+    "lie_algebra_nonlinearity",
+    None,
+    "Nonlinearity to apply to the norm of the lie algebra elements. Supported are None/tanh",
+)
 
 
 def load(config, **unused_kwargs):
@@ -65,6 +70,7 @@ def load(config, **unused_kwargs):
         num_layers=config.num_layers,
         fill=config.fill,
         liftsamples=config.lift_samples,
+        lie_algebra_nonlinearity=config.lie_algebra_nonlinearity,
     )
 
     molecule_predictor = MoleculePredictor(predictor, config.task, config.ds_stats)
