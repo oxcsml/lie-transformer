@@ -2,11 +2,14 @@ from os import path as osp
 import time
 import torch
 from torch.utils.tensorboard import SummaryWriter
-
+import ipdb
+import numpy as np
+import math
 # For reproducibility while researching, but might affect speed!
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 torch.manual_seed(0)
+np.random.seed(0)
 
 import forge
 from forge import flags
@@ -74,6 +77,9 @@ flags.DEFINE_boolean("log_train_values", True, "Logs train values if True.")
 flags.DEFINE_float(
     "ema_alpha", 0.99, "Alpha coefficient for exponential moving average of train logs."
 )
+flags.DEFINE_boolean("train_aug_t2", False, "T2 Training augmentation.")
+
+flags.DEFINE_boolean("train_aug_se2", True, "SE2 Training augmentation.")
 
 # Optimization
 flags.DEFINE_integer("train_epochs", 200, "Maximum number of training epochs.")
@@ -110,7 +116,8 @@ def main():
     model, model_name = fet.load(config.model_config, config)
     model = model.to(device)
     print(model)
-
+    torch.manual_seed(0)
+   
     # Prepare environment
 
     if 'set_transformer' in config.model_config:
@@ -119,7 +126,9 @@ def main():
             ("learning_rate", "lr"),
             ("num_heads", "nheads"),
             ("patterns_reps", "reps"),
+            ("model_seed", "mseed"),
             ("train_epochs", "epochs"),
+            ("naug", "naug"),
             
             ]
 
@@ -149,6 +158,7 @@ def main():
             ("patterns_reps", "reps"),
             ("lift_samples", "nsamples"),
             ("content_type", "content"),
+            ("naug", "naug"),
         ]
 
     run_name = ""#config.run_name
@@ -235,7 +245,16 @@ def main():
         model.train()
 
         for batch_idx, data in enumerate(train_loader):
-            data, presence, target = [d.to(device) for d in data]
+            data, presence, target = [d.to(device).float() for d in data]
+            if config.train_aug_t2:
+                unifs = np.random.normal(1) # torch.rand(1) * 2 * math.pi # torch.randn(1).to(device) * 10
+                data += unifs
+            if config.train_aug_se2:
+                #angle = torch.rand(1) * 2 * math.pi 
+                angle = np.random.random(size=1) * 2 * math.pi
+                unifs = np.random.normal(1) # torch.randn(1).to(device) * 10
+                data = rotate(data, angle.item())
+                data += unifs
             outputs = model([data, presence], target)
 
             if torch.isnan(outputs.loss):
@@ -340,7 +359,7 @@ def main():
                 with torch.no_grad():
                     reports = None
                     for data in test_loader:
-                        data, presence, target = [d.to(device) for d in data]
+                        data, presence, target = [d.to(device).float() for d in data]
                         # if config.data_config == "configs/constellation/constellation.py":
                             # if config.global_rotation_angle != 0.0:
                                 # data = rotate(data, config.global_rotation_angle)
