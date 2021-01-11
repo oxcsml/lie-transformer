@@ -23,7 +23,7 @@ the dataset are available in the respective config files. The project is using
 
 ### Counting patterns in the constellation dataset
 
-Currently, the only implemented task is counting patterns in the constellation dataset. We generate
+The first task implemented is counting patterns in the constellation dataset. We generate
 a fixed dataset of constellations, where each constellation
 consists of 0-8 patterns; each pattern consists of corners of a shape. Currently available shapes are triangle,
 square, pentagon and an L. The task is to count the number of occurences of each pattern.
@@ -37,9 +37,24 @@ Else, the constellation datasets are regenerated at the beginning of the trainin
 When changing the dataset parameters (e.g. number of patterns, types of patterns etc) make sure that the model
 parameters are adjusted accordingly. For example `patterns=square,square,triangle,triangle,pentagon,pentagon,L,L`
 means that there can be four different patterns, each repeated two times. That means that counting will involve four
-three-way classification tasks, and so that `n_outputs` and `output_dim` in `classifiery.py` needs to be set to `4` and
+three-way classification tasks, and so that `n_outputs` and `output_dim` in `classifier.py` needs to be set to `4` and
 `3`, respectively. All this can be set through command-line arguments. 
 
+
+### QM9
+```
+python scripts/train_molecule.py \
+    --run_name "molecule_homo" \
+    --model_config "configs/molecule/eqv_transformer_model.py" \
+    --model_seed 0
+    --data_seed 0 \
+    --task homo
+```
+
+### Hamiltonian dynamics
+```
+python scripts/dynamics/train_dynamics.py --activation_function swish --architecture model_1 --attention_fn dot_product --batch_size 100 --block_norm layer_pre --dim_hidden 160 --kernel_dim 16 --kernel_type mlp --kill_if_poor False --learning_rate 0.001 --lr_schedule cosine_annealing --model_seed 0 --n_systems 150000 --n_train 3000 --num_heads 8 --num_layers 5 --num_particles 6 --run_name test_run --save_check_points 500 --train_epochs 200
+```
 
 ## Contributing
 

@@ -10,10 +10,10 @@ from forge import flags
 
 flags.DEFINE_integer("n_train", 3000, "Number of training datapoints.")
 flags.DEFINE_integer("n_test", 2000, "Number of testing datapoints.")
-flags.DEFINE_integer("n_val", 200, "Number of validation datapoints.")
+flags.DEFINE_integer("n_val", 2000, "Number of validation datapoints.")
 flags.DEFINE_integer(
-    "n_systems", 10000, "Size of total dataset generated/used."
-)  # SZ: I think
+    "n_systems", 10000, "Size of total dataset generated."
+)  
 flags.DEFINE_string(
     "data_path",
     "./datasets/ODEDynamics/SpringDynamics/",
@@ -21,9 +21,10 @@ flags.DEFINE_string(
 )
 flags.DEFINE_integer(
     "sys_dim", 2, "[add description]."
-)  # TODO: SZ: find where this is used. Hard code?
-flags.DEFINE_integer("space_dim", 2, "[add description].")  # TODO
+)  
+flags.DEFINE_integer("space_dim", 2, "Dimension of particle system.") 
 flags.DEFINE_integer("data_seed", 0, "Data splits random seed.")  
+flags.DEFINE_integer("num_particles", 6, "Number of particles in system.") 
 
 # ####
 # from types import SimpleNamespace
@@ -48,11 +49,12 @@ def load(config):
         n_systems=config.n_systems,
         root_dir=config.data_path,
         space_dim=config.space_dim,
+        num_particles=config.num_particles,
     )
 
     splits = {
         "train": config.n_train,
-        "val": config.n_val,
+        "val": min(config.n_train, config.n_val),
         "test": config.n_test,
     }
 

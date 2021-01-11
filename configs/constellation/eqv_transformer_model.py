@@ -112,6 +112,8 @@ def load(config, **unused_kwargs):
         group = SO3(0.2)
     elif config.group == "T3":
         group = T(3)
+    elif config.group == "T2":
+        group = T(2)
     elif config.group == "Trivial3":
         group = Trivial(3)
     else:

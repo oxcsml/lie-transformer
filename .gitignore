@@ -125,4 +125,10 @@ ckpt.store
 sheh_scripts/
 outputs/
 datasets/
+<<<<<<< HEAD
 forge_
+=======
+
+# michael stuff
+scripts/ablations
+>>>>>>> 17c53f360ac9b54c85789c80830040dc9e2354eb

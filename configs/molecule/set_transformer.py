@@ -16,7 +16,7 @@ flags.DEFINE_boolean(
 )
 flags.DEFINE_integer("n_enc_layers", 4, "Number of encoder layers.")
 flags.DEFINE_integer("n_dec_layers", 4, "Number of encoder layers.")
-flags.DEFINE_integer("n_heads", 4, "Number of attention heads.")
+flags.DEFINE_integer("num_heads", 4, "Number of attention heads.")
 flags.DEFINE_integer(
     "n_inducing_points",
     0,

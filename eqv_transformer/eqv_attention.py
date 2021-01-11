@@ -141,8 +141,8 @@ class EquivairantMultiheadAttention(nn.Module):
         self.output_linear = nn.Linear(c_out, c_out)
 
     def extract_neighbourhoods(self, input, query_indices=None):
-        """ Extracts which points each other point is to attend to based on distance, or graph structure
-        
+        """Extracts which points each other point is to attend to based on distance, or graph structure
+
 
         Parameters
         ----------
@@ -280,7 +280,7 @@ class EquivairantMultiheadAttention(nn.Module):
             normalization = nbhd_mask.unsqueeze(-1).sum(-2, keepdim=True)
             normalization = torch.clamp(normalization, min=1)
             attention_weights = attention_weights / normalization
-            
+
         # From the non-local attention paper
         elif self.attention_fn == "dot_product":
             attention_weights = torch.where(
@@ -319,10 +319,10 @@ class EquivairantMultiheadAttention(nn.Module):
         # # Sum over the coefficients
         # # TODO: Currently allows self interaction in the attention sum. Some pre matrices?
         # # (bs, n * ns, nbhd_size, h), (bs, n * ns, nbhd_size, h, c_out / h) -> (bs, n * ns, nbhd_size, h)
-        # coset_functions = (attention_weights.unsqueeze(-1) * nbhd_coset_functions).sum(
-        #     dim=2
-        # )
-        # coset_functions = rearrange(coset_functions, "b n h d -> b n (h d)")
+        # coset_functions_1 = (
+        #     attention_weights.unsqueeze(-1) * nbhd_coset_functions
+        # ).sum(dim=2)
+        # coset_functions_1 = rearrange(coset_functions_1, "b n h d -> b n (h d)")
 
         attention_weights_expanded = torch.zeros(
             (bs, n, n, self.n_heads),
@@ -521,7 +521,11 @@ class GlobalPool(nn.Module):
             masked = torch.where(
                 mask.unsqueeze(-1),
                 vals,
-                torch.tensor(-1e38, dtype=vals.dtype, device=vals.device,)
+                torch.tensor(
+                    -1e38,
+                    dtype=vals.dtype,
+                    device=vals.device,
+                )
                 * torch.ones_like(vals),
             )
 
@@ -551,7 +555,8 @@ class EquivariantTransformer(nn.Module):
         architecture="model_1",
         attention_fn="softmax",  # softmax or dot product? SZ: TODO: "dot product" is used to describe both the attention weights being non-softmax (non-local attention paper) and the feature kernel. should fix terminology
         feature_embed_dim=None,
-        amp=False,
+        max_sample_norm=None,
+        lie_algebra_nonlinearity=None,
     ):
         super().__init__()
 
@@ -672,11 +677,34 @@ class EquivariantTransformer(nn.Module):
 
         self.group = group
         self.liftsamples = liftsamples
-        self.amp = amp
+        self.max_sample_norm = max_sample_norm
+
+        self.lie_algebra_nonlinearity = lie_algebra_nonlinearity
+        if lie_algebra_nonlinearity is not None:
+            if lie_algebra_nonlinearity == "tanh":
+                self.lie_algebra_nonlinearity = nn.Tanh()
+            else:
+                raise ValueError(
+                    f"{lie_algebra_nonlinearity} is not a supported nonlinearity"
+                )
 
     def forward(self, input):
-        lifted_data = self.group.lift(input, self.liftsamples)
+        if self.max_sample_norm is None:
+            lifted_data = self.group.lift(input, self.liftsamples)
+        else:
+            lifted_data = [
+                torch.tensor(self.max_sample_norm * 2, device=input[0].device),
+                0,
+                0,
+            ]
+            while lifted_data[0].norm(dim=-1).max() > self.max_sample_norm:
+                lifted_data = self.group.lift(input, self.liftsamples)
 
-        with torch.cuda.amp.autocast(enabled=self.amp):
-            return self.net(lifted_data)
+        if self.lie_algebra_nonlinearity is not None:
+            lifted_data = list(lifted_data)
+            pairs_norm = lifted_data[0].norm(dim=-1) + 1e-6
+            lifted_data[0] = lifted_data[0] * (
+                self.lie_algebra_nonlinearity(pairs_norm / 7) / pairs_norm
+            ).unsqueeze(-1)
 
+        return self.net(lifted_data)

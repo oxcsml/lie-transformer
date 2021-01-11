@@ -15,6 +15,8 @@ def load(config, **unused_kwargs):
 
     if config.group == "T(2)":
         group = T(2)
+    elif config.group == "T(3)":
+        group = T(3)
     else:
         raise NotImplementedError(f"Group {config.group} is not implemented.")
 
@@ -27,6 +29,11 @@ def load(config, **unused_kwargs):
         num_layers=config.num_layers,
     )
 
-    dynamics_predictor = DynamicsPredictor(network, debug=config.debug)
+    if config.data_config == "configs/dynamics/nbody_dynamics_data.py":
+        task = "nbody"
+    elif config.data_config == "configs/dynamics/spring_dynamics_data.py":
+        task = "spring"
+
+    dynamics_predictor = DynamicsPredictor(network, debug=config.debug, task=task)
 
     return dynamics_predictor, "HLieResNet_Dynamics"

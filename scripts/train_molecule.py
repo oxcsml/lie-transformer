@@ -9,7 +9,6 @@ import torch
 import torch.nn as nn
 from torch import optim
 from torch.utils.tensorboard import SummaryWriter
-import transformers
 
 import forge
 from forge import flags
@@ -26,6 +25,7 @@ from eqv_transformer.train_tools import (
     log_reports,
     load_checkpoint,
     save_checkpoint,
+    delete_checkpoint,
     ExponentialMovingAverage,
     get_component,
     nested_to,
@@ -95,7 +95,9 @@ flags.DEFINE_float("learning_rate", 1e-5, "SGD learning rate.")
 flags.DEFINE_float("beta1", 0.5, "Adam Beta 1 parameter")
 flags.DEFINE_float("beta2", 0.9, "Adam Beta 2 parameter")
 flags.DEFINE_string(
-    "lr_schedule", "none", "What learning rate schedule to use. Options: cosine, none",
+    "lr_schedule",
+    "none",
+    "What learning rate schedule to use. Options: cosine, none",
 )
 flags.DEFINE_boolean(
     "parameter_count", False, "If True, print model parameter count and exit"
@@ -107,14 +109,25 @@ flags.DEFINE_boolean(
     "produce initialisation activation histograms the activations of specified modules through training",
 )
 flags.DEFINE_boolean("profile_model", False, "Run profiling code on model and exit")
-flags.DEFINE_boolean("amp", False, "Use automatic mixed precision training")
 flags.DEFINE_float(
-    "lr_floor", 0.01, "minimum multiplicative factor of the learning rate in annealing"
+    "lr_floor", 0, "minimum multiplicative factor of the learning rate in annealing"
 )
 flags.DEFINE_float(
     "warmup_length", 0.01, "fraction of the training time to use for warmup"
 )
-flags.DEFINE_bool("half_precision", False, "Train model with float16s")
+flags.DEFINE_bool(
+    "find_spikes", False, "Find big spikes in validation loss and save checkpoints"
+)
+flags.DEFINE_boolean(
+    "only_store_last_checkpoint",
+    False,
+    "If True, deletes last checkpoint when saving current checkpoint",
+)
+flags.DEFINE_boolean(
+    "clip_grad",
+    False,
+    "If True, clip gradient L2-norms at 1.",
+)
 
 #####################################################################################################################
 
@@ -155,12 +168,6 @@ def main():
     if config.lr_schedule != "none":
         run_name += "_" + config.lr_schedule
 
-    # if config.block_norm != "none":
-    #     run_name += "_" + config.block_norm
-
-    # if config.kernel_norm != "none":
-    #     run_name += "_" + config.kernel_norm
-
     # Print flags
     fet.print_flags()
 
@@ -172,32 +179,16 @@ def main():
         model_params,
         lr=opt_learning_rate,
         betas=(config.beta1, config.beta2),
-        eps=1e-4 if config.half_precision else 1e-8,
+        eps=1e-8,
     )
     # model_opt = torch.optim.SGD(model_params, lr=opt_learning_rate)
 
     # Cosine annealing learning rate
     if config.lr_schedule == "cosine":
-        # num_warmup_epochs = int(0.05 * config.train_epochs)
-        # num_warmup_steps = num_warmup_epochs
-        # num_training_steps = config.train_epochs
-        # lr_schedule = transformers.get_cosine_schedule_with_warmup(
-        #     model_opt,
-        #     num_warmup_steps=num_warmup_steps,
-        #     num_training_steps=num_training_steps,
-        # )
         cos = cosLr(config.train_epochs)
-        lr_sched = lambda e: cos(e)
+        lr_sched = lambda e: max(cos(e), config.lr_floor * config.learning_rate)
         lr_schedule = optim.lr_scheduler.LambdaLR(model_opt, lr_sched)
     elif config.lr_schedule == "cosine_warmup":
-        # num_warmup_epochs = int(0.05 * config.train_epochs)
-        # num_warmup_steps = num_warmup_epochs
-        # num_training_steps = config.train_epochs
-        # lr_schedule = transformers.get_cosine_schedule_with_warmup(
-        #     model_opt,
-        #     num_warmup_steps=num_warmup_steps,
-        #     num_training_steps=num_training_steps,
-        # )
         cos = cosLr(config.train_epochs)
         lr_sched = lambda e: max(
             min(e / (config.warmup_length * config.train_epochs), 1) * cos(e),
@@ -220,17 +211,8 @@ def main():
             f"{config.lr_schedule} is not a recognised learning rate schedule"
         )
 
-    if config.half_precision:
-        model.half()
-
     num_params = param_count(model)
     if config.parameter_count:
-        # with torch.no_grad():
-        if config.amp:
-            from torch.cuda.amp import autocast, GradScaler
-
-            scaler = GradScaler()
-
         for (name, parameter) in model.predictor.named_parameters():
             print(name, parameter.dtype)
 
@@ -238,18 +220,18 @@ def main():
         print("============================================================")
         print(f"{model_name} parameters: {num_params:.5e}")
         print("============================================================")
-        from torchsummary import summary
+        # from torchsummary import summary
 
         data = next(iter(dataloaders["train"]))
 
         data = {k: v.to(device) for k, v in data.items()}
-        if config.half_precision:
-            data = {k: v.to(torch.float16) for k, v in data.items()}
-
-        if config.amp:
-            print(summary(model.predictor, data, batch_size=config.batch_size,))
-        else:
-            print(summary(model.predictor, data, batch_size=config.batch_size,))
+        # print(
+        #     summary(
+        #         model.predictor,
+        #         data,
+        #         batch_size=config.batch_size,
+        #     )
+        # )
 
         parameters = sum(
             parameter.numel() for parameter in model.predictor.parameters()
@@ -268,27 +250,10 @@ def main():
             data = {k: v.to(device) for k, v in data.items()}
 
             model_opt.zero_grad()
-            if config.amp:
-                outputs = model(data, compute_loss=True)
-                torch.cuda.empty_cache()
-
-                scaler.scale(outputs.loss).backward()
-            else:
-                outputs = model(data, compute_loss=True)
-                torch.cuda.empty_cache()
-                memory_allocations.append(
-                    torch.cuda.memory_reserved() / 1024 / 1024 / 1024
-                )
-                outputs.loss.backward()
-
-            # print(
-            #     "%i torch.cuda.memory_allocated: %0.4fGB"
-            #     % (batch_idx, torch.cuda.memory_allocated() / 1024 / 1024 / 1024)
-            # )
-            # print(
-            #     "%i torch.cuda.memory_reserved:  %0.4fGB"
-            #     % (batch_idx, torch.cuda.memory_reserved() / 1024 / 1024 / 1024)
-            # )
+            outputs = model(data, compute_loss=True)
+            # torch.cuda.empty_cache()
+            # memory_allocations.append(torch.cuda.memory_reserved() / 1024 / 1024 / 1024)
+            # outputs.loss.backward()
 
         print(f"max memory reserved in one pass: {max(memory_allocations):0.4}GB")
         sys.exit(0)
@@ -297,7 +262,11 @@ def main():
         print(f"{model_name} parameters: {num_params:.5e}")
 
     # set up results folders
-    results_folder_name = osp.join(data_name, model_name, run_name,)
+    results_folder_name = osp.join(
+        data_name,
+        model_name,
+        run_name,
+    )
 
     logdir = osp.join(config.results_dir, results_folder_name.replace(".", "_"))
     logdir, resume_checkpoint = fet.init_checkpoint(
@@ -308,9 +277,12 @@ def main():
 
     # Try to restore model and optimizer from checkpoint
     if resume_checkpoint is not None:
-        start_epoch = load_checkpoint(resume_checkpoint, model, model_opt, lr_schedule)
+        start_epoch, best_valid_mae = load_checkpoint(
+            resume_checkpoint, model, model_opt, lr_schedule
+        )
     else:
         start_epoch = 1
+        best_valid_mae = 1e12
 
     train_iter = (start_epoch - 1) * (
         len(dataloaders["train"].dataset) // config.batch_size
@@ -367,10 +339,6 @@ def main():
         activations = {}
 
         def save_activation(name, mod, inpt, otpt):
-            # print(name)
-            # print(len(inpt))
-            # print(len(otpt))
-
             if isinstance(inpt, tuple):
                 if isinstance(inpt[0], list) | isinstance(inpt[0], tuple):
                     activations[name + "_inpt"] = inpt[0][1].detach().cpu()
@@ -396,16 +364,11 @@ def main():
         for name, tracked_module in activation_tracked:
             tracked_module.register_forward_hook(partial(save_activation, name))
 
-    # Grad scaling
-    if config.amp:
-        scaler = torch.cuda.amp.GradScaler()
-
     # Training
     start_t = time.perf_counter()
-    if config.log_train_values:
-        train_emas = ExponentialMovingAverage(alpha=config.ema_alpha, debias=True)
 
     iters_per_epoch = len(dataloaders["train"])
+    last_valid_loss = 1000.0
     for epoch in tqdm(range(start_epoch, config.train_epochs + 1)):
         model.train()
 
@@ -415,13 +378,13 @@ def main():
             model_opt.zero_grad()
             outputs = model(data, compute_loss=True)
 
-            if config.amp:
-                scaler.scale(outputs.loss).backward()
-                scaler.step(model_opt)
-                scaler.update()
-            else:
-                outputs.loss.backward()
-                model_opt.step()
+            outputs.loss.backward()
+            if config.clip_grad:
+                # Clip gradient L2-norm at 1
+                torch.nn.utils.clip_grad.clip_grad_norm_(
+                    model.predictor.parameters(), 1.0
+                )
+            model_opt.step()
 
             if config.init_activations:
                 model_opt.zero_grad()
@@ -458,6 +421,7 @@ def main():
                         data = {k: v.to(device) for k, v in data.items()}
                         outputs = model(data, compute_loss=True)
                         valid_mae = valid_mae + outputs.mae
+                model.train()
 
                 outputs["reports"].valid_mae = valid_mae / len(dataloaders["valid"])
 
@@ -473,6 +437,32 @@ def main():
                     len(dataloaders["train"].dataset) // config.batch_size,
                     prefix="valid",
                 )
+
+                loss_diff = (
+                    last_valid_loss - (valid_mae / len(dataloaders["valid"])).item()
+                )
+                if loss_diff and config.find_spikes < -0.1:
+                    save_checkpoint(
+                        checkpoint_name + "_spike",
+                        epoch,
+                        model,
+                        model_opt,
+                        lr_schedule,
+                        outputs.loss,
+                    )
+
+                last_valid_loss = (valid_mae / len(dataloaders["valid"])).item()
+
+                if outputs["reports"].valid_mae < best_valid_mae:
+                    save_checkpoint(
+                        checkpoint_name,
+                        "best_valid_mae",
+                        model,
+                        model_opt,
+                        lr_schedule,
+                        best_valid_mae,
+                    )
+                    best_valid_mae = outputs["reports"].valid_mae
 
             train_iter += 1
 
@@ -598,11 +588,23 @@ def main():
         # Save a checkpoint
         if epoch % config.save_check_points == 0:
             save_checkpoint(
-                checkpoint_name, epoch, model, model_opt, lr_schedule, outputs.loss,
+                checkpoint_name,
+                epoch,
+                model,
+                model_opt,
+                lr_schedule,
+                best_valid_mae,
             )
+            if config.only_store_last_checkpoint:
+                delete_checkpoint(checkpoint_name, epoch - config.save_check_points)
 
     save_checkpoint(
-        checkpoint_name, "final", model, model_opt, lr_schedule, outputs.loss,
+        checkpoint_name,
+        "final",
+        model,
+        model_opt,
+        lr_schedule,
+        outputs.loss,
     )
 
 

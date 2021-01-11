@@ -1,4 +1,5 @@
 import copy
+import os
 import time
 import torch
 from torch import nn
@@ -86,7 +87,7 @@ def get_checkpoint_iter(checkpoint_iter, checkpoint_dir):
     return max(fet.find_model_files(checkpoint_dir).keys())
 
 
-def load_checkpoint(checkpoint_path, model, opt, lr_sched=None):
+def load_checkpoint(checkpoint_path, model, opt=None, lr_sched=None):
     print("Restoring checkpoint from '{}'".format(checkpoint_path))
     checkpoint = torch.load(checkpoint_path)
     # Restore model
@@ -104,7 +105,13 @@ def load_checkpoint(checkpoint_path, model, opt, lr_sched=None):
     if checkpoint["epoch"] == "final":
         checkpoint["epoch"] = 0
     start_epoch = checkpoint["epoch"] + 1
-    return start_epoch
+
+    if hasattr(checkpoint, "loss"):
+        loss = checkpoint["loss"]
+    else:
+        loss = None
+
+    return start_epoch, loss
 
 
 def save_checkpoint(checkpoint_name, epoch, model, opt, lr_sched=None, loss=None):
@@ -125,6 +132,12 @@ def save_checkpoint(checkpoint_name, epoch, model, opt, lr_sched=None, loss=None
 
     torch.save(state, epoch_ckpt_file)
     return epoch_ckpt_file
+
+
+def delete_checkpoint(checkpoint_name, epoch):
+    epoch_ckpt_file = "{}-{}".format(checkpoint_name, epoch)
+    os.remove(epoch_ckpt_file)
+    print("Deleted checkpoint file at {}".format(epoch_ckpt_file))
 
 
 class ExponentialMovingAverage(nn.Module):
@@ -219,4 +232,3 @@ def parameter_analysis(model):
             sum(p.numel() for p in model.parameters()) * 4 / (1024 ** 2),
         )
     )
-
