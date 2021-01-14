@@ -25,6 +25,13 @@ from eqv_transformer.kernels import (
 )
 
 
+"""
+Code implementing the main parts of the LieTransformer. 
+This code builds on code written for https://arxiv.org/abs/2002.12880, 
+in particular the use of their group classes.
+"""
+
+
 class EquivairantMultiheadAttention(nn.Module):
     def __init__(
         self,
@@ -304,25 +311,7 @@ class EquivairantMultiheadAttention(nn.Module):
 
         # Pass the inputs through the value linear layer
         # (bs, n * ns, nbhd_size, c_in) -> (bs, n * ns, nbhd_size, c_out)
-        # nbhd_coset_functions = self.input_linear(nbhd_coset_functions)
-        # nbhd_coset_functions = self.input_linear(coset_functions.to(torch.float16))[
-        #     BS, nbhd_idx
-        # ]  # More efficient than passing each nbhd through the linear layer
         coset_functions = self.input_linear(coset_functions)
-
-        # nbhd_coset_functions = coset_functions[BS, nbhd_idx]
-
-        # # Split the features into heads
-        # nbhd_coset_functions = rearrange(
-        #     nbhd_coset_functions, "b n m (h d) -> b n m h d", h=self.n_heads
-        # )
-        # # Sum over the coefficients
-        # # TODO: Currently allows self interaction in the attention sum. Some pre matrices?
-        # # (bs, n * ns, nbhd_size, h), (bs, n * ns, nbhd_size, h, c_out / h) -> (bs, n * ns, nbhd_size, h)
-        # coset_functions_1 = (
-        #     attention_weights.unsqueeze(-1) * nbhd_coset_functions
-        # ).sum(dim=2)
-        # coset_functions_1 = rearrange(coset_functions_1, "b n h d -> b n (h d)")
 
         attention_weights_expanded = torch.zeros(
             (bs, n, n, self.n_heads),
@@ -347,7 +336,6 @@ class EquivairantMultiheadAttention(nn.Module):
 
         # ( (bs, n * ns, n * ns, g_dim), (bs, n * ns, c_out), (bs, n * ns) )
         return (pairwise_g, coset_functions, mask)
-        # return (pairwise_g, coset_functions.to(torch.float32), mask)
 
 
 class EquivariantTransformerBlock(nn.Module):
@@ -424,67 +412,10 @@ class EquivariantTransformerBlock(nn.Module):
                 lambda inpt: inpt[1] + self.bn_ema(self.ema(inpt))[1]
             )
             self.mlp_function = lambda inpt: inpt[1] + self.bn_mlp(self.mlp(inpt))[1]
-        elif block_norm == "DW":
-            self.mlp = nn.Sequential(
-                OrderedDict(
-                    [
-                        ("linear1", Pass(nn.Linear(dim, dim), dim=1)),
-                        ("norm1", Pass(nn.LayerNorm(dim), dim=1)),
-                        ("activation", Pass(Swish(), dim=1)),
-                        ("linear2", Pass(nn.Linear(dim, dim), dim=1)),
-                        ("norm2", Pass(nn.LayerNorm(dim), dim=1)),
-                    ]
-                )
-            )
-            self.atten = nn.Sequential(
-                OrderedDict(
-                    [
-                        ("norm1", Pass(nn.LayerNorm(dim), dim=1)),
-                        ("activation1", Pass(Swish(), dim=1)),
-                        ("attention", self.ema),
-                        ("norm2", Pass(nn.LayerNorm(dim), dim=1)),
-                        ("activation2", Pass(Swish(), dim=1)),
-                    ]
-                )
-            )
-            # TODO: Check this works - dereferencing might cause GC/Not the desired effect wrt module registration
-            self.ema = None
-
-            self.final = nn.Sequential(
-                OrderedDict(
-                    [
-                        ("norm", Pass(nn.LayerNorm(dim), dim=1)),
-                        ("activation", Pass(Swish(), dim=1)),
-                    ]
-                )
-            )
-
-            self.attention_function = lambda inpt: inpt[1] + self.atten(inpt)[1]
-            self.mlp_function = lambda inpt: self.final(
-                (inpt[0], inpt[1] + self.mlp(inpt)[1], inpt[2])
-            )[1]
         else:
             raise ValueError(f"{block_norm} is invalid block norm type.")
 
     def forward(self, inpt):
-        # # optional layer norm
-        # if getattr(self, "ln_ema", None) is not None:
-        #     # equivariant attention with residual connection
-        #     coset_functions = (
-        #         coset_functions
-        #         + self.ema((pairwise_g, self.ln_ema(coset_functions), mask))[1]
-        #     )
-        # else:
-        #     coset_functions = (
-        #         coset_functions + self.ema((pairwise_g, coset_functions, mask))[1]
-        #     )
-
-        # # optional layer norm
-        # if getattr(self, "ln_mlp", None) is not None:
-        #     coset_functions = coset_functions + self.mlp(self.ln_mlp(coset_functions))
-        # else:
-        #     coset_functions = coset_functions + self.mlp(coset_functions)
-
         inpt[1] = self.attention_function(inpt)
         inpt[1] = self.mlp_function(inpt)
 
@@ -549,7 +480,7 @@ class EquivariantTransformer(nn.Module):
         kernel_norm="none",
         kernel_type="mlp",
         kernel_dim=16,
-        kernel_act="swish",  # why "kernel" activation?
+        kernel_act="swish",
         mc_samples=0,
         fill=1.0,
         architecture="model_1",
@@ -659,18 +590,6 @@ class EquivariantTransformer(nn.Module):
                 GlobalPool(mean=global_pool_mean)
                 if global_pool
                 else Expression(lambda x: x[1]),
-            )
-        elif architecture == "DW":
-            self.net = nn.Sequential(
-                Pass(nn.Linear(dim_input, dim_hidden[0]), dim=1),
-                Pass(nn.LayerNorm(dim_hidden[0]), dim=1),
-                Pass(Swish(), dim=1),
-                *[
-                    attention_block(dim_hidden[i], num_heads[i])
-                    for i in range(num_layers)
-                ],
-                Pass(nn.Linear(dim_hidden[-1], dim_output), dim=1),
-                GlobalPool(mean=global_pool_mean),
             )
         else:
             raise ValueError(f"{architecture} is not a valid architecture.")
