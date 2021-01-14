@@ -125,6 +125,7 @@ ckpt.store
 sheh_scripts/
 outputs/
 datasets/
+forge_
 
 # michael stuff
 scripts/ablations
