@@ -2,7 +2,7 @@
 
 This repository contains the implementation of the LieTransformer used for experiments in the paper
 
-[LieTransformer: Equivariant self-attention for Lie Groups](https://arxiv.org/abs/2012.10885)
+[LieTransformer: Equivariant self-attention for Lie Groups]()
 
 by [Michael Hutchinson](), [Charline Le Lan](), [Sheheryar Zaidi](), [Emilien Dupont](), [Yee Whye Teh]() and [Hyunjik Kim]()
 
