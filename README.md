@@ -2,7 +2,7 @@
 
 This repository contains the implementation of the LieTransformer used for experiments in the paper
 
-[LieTransformer: Equivariant self-attention for Lie Groups](https://arxiv.org/abs/2012.10885)
+[LieTransformer: Equivariant self-attention for Lie Groups]()
 
 by [Michael Hutchinson](), [Charline Le Lan](), [Sheheryar Zaidi](), [Emilien Dupont](), [Yee Whye Teh]() and [Hyunjik Kim]()
 
@@ -21,7 +21,7 @@ LieTransformer is a equivariant Transformer-like model, built out of equivariant
 
 ## Architecture
 
-The overall architecture of the LieTransformer is similar to the architecture of the original Transformer, interleaving series of attention layers and pointwise MLPs in residual blocks. The architecture of the LieSelfAttention blocks differs however, and can be seen below. For more details, please see [the paper](https://arxiv.org/abs/2012.10885). 
+The overall architecture of the LieTransformer is similar to the architecture of the original Transformer, interleaving series of attention layers and pointwise MLPs in residual blocks. The architecture of the LieSelfAttention blocks differs however, and can be seen below. For more details, please see [the paper](). 
 
 ![model diagram](.github/images/model_diagram.png)
 
