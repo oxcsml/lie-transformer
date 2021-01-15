@@ -7,6 +7,10 @@ This repository contains the implementation of the LieTransformer used for exper
 by [Michael Hutchinson](), [Charline Le Lan](), [Sheheryar Zaidi](), [Emilien Dupont](), [Yee Whye Teh]() and [Hyunjik Kim]()
 
 
+Pattern recognition | Molecular property prediction | Particle Dynamics
+:-------------------------:|:-------------------------:|:-------------------------:
+![Constellations](.github/images/constellation.gif) | ![rotating molecule](.github/images/rotating_molecule.gif)
+
 <!-- ## Cloning this repo
 To clone this project, run `git clone --recurse-submodules https://github.com/akosiorek/eqv_transformer`.
 If you cloned without the `--recurse-submodules` option, then run `git submodule update --init --recursive`. -->
