@@ -9,7 +9,7 @@ by [Michael Hutchinson](), [Charline Le Lan](), [Sheheryar Zaidi](), [Emilien Du
 
 Pattern recognition | Molecular property prediction | Particle Dynamics
 :-------------------------:|:-------------------------:|:-------------------------:
-![Constellations](.github/images/constellation.gif) | ![rotating molecule](.github/images/rotating_molecule.gif)
+![Constellations](.github/images/constellation.gif) | ![Rotating molecule](.github/images/rotating_molecule.gif) | ![Particle trajectories](.github/images/single_traj_n_train_400_steps_100_idx_3_chunk_len_100.gif)
 
 <!-- ## Cloning this repo
 To clone this project, run `git clone --recurse-submodules https://github.com/akosiorek/eqv_transformer`.
