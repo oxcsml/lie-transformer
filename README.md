@@ -9,7 +9,7 @@ by [Michael Hutchinson](), [Charline Le Lan](), [Sheheryar Zaidi](), [Emilien Du
 
 Pattern recognition | Molecular property prediction | Particle Dynamics
 :-------------------------:|:-------------------------:|:-------------------------:
-![Constellations](.github/images/constellation.gif) | ![Rotating molecule](.github/images/rotating_molecule.gif) | ![Particle trajectories](.github/images/single_traj_n_train_400_steps_100_idx_3_chunk_len_100.gif)
+![Constellations](.github/images/constellation.gif) | ![Rotating molecule](.github/images/rotating_molecule.gif) | ![Particle trajectories](.github/images/single_traj_n_train_400_steps_100_idx_3_chunk_len_100_readme.gif)
 
 <!-- ## Cloning this repo
 To clone this project, run `git clone --recurse-submodules https://github.com/akosiorek/eqv_transformer`.
@@ -71,6 +71,8 @@ three-way classification tasks, and so that `n_outputs` and `output_dim` in `cla
 ![Constellations results](.github/images/constellations_results.png)
 
 ### QM9
+This dataset consists of 133,885 small inorganic molecules described by the location and charge of each atom in the molecule, along with the bonding structure of the molecule. The dataset includes 19 properties of each molecule, such as various rotational constants, energies and enthalpies. We aim to predict 12 of these properties.
+
 ```
 python scripts/train_molecule.py \
     --run_name "molecule_homo" \
