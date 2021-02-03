@@ -8,8 +8,8 @@ setup(
     packages=["eqv_transformer"],
     python_requires=">=3.7",
     install_requires=[
-        "torch==1.6.0",
-        "torchvision==0.7.0",
+        "torch>=1.6.0",
+        "torchvision>=0.7.0",
         "tensorboard",
         "numpy",
         "attrdict",
