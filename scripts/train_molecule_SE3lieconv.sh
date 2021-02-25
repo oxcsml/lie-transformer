@@ -27,5 +27,8 @@ python scripts/train_molecule.py \
     --lr_schedule cosine_warmup \
     --channels 1536 \
     --task $task \
-    --resume True
-    # --parameter_count True
+    --parameter_count True \
+    --use_pseudo False \
+    --dual_quaternions True \
+    --positive_quaternions True \
+    

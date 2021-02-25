@@ -13,10 +13,21 @@ kernel_dim=6
 lr_schedule="cosine"
 lr_floor=0
 warmup_length=0.01
-task=[ if $1 exists, ${tasks[$1]}, else, ${tasks[0]}]
+# task=[ if $1 exists, ${tasks[$1]}, else, ${tasks[0]}]
+if [ $# == 0 ]
+then
+    task=${tasks[0]}
+elif [ $# == 1 ]
+then
+    task=${tasks[$1]}
+elif [ $# == 2 ]
+then
+    task=${tasks[$1]}
+    export CUDA_VISIBLE_DEVICES=$2
+fi
 
 python scripts/train_molecule.py \
-    --run_name "limit_norm_test" \
+    --run_name "quaternions_test" \
     --model_config "configs/molecule/eqv_transformer_model.py" \
     --model_seed $modelseed \
     --data_seed $dataseed \
@@ -45,4 +56,8 @@ python scripts/train_molecule.py \
     --architecture lieconv \
     --attention_fn dot_product \
     --parameter_count True \
-    --max_sample_norm 1e6
+    --max_sample_norm 1e6 \
+    --use_pseudo True \
+    --dual_quaternions False \
+    --positive_quaternions True \
+    

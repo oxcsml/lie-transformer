@@ -63,3 +63,6 @@ python scripts/train_molecule.py \
     --max_sample_norm 1e6 \
     --lie_algebra_nonlinearity tanh \
     --parameter_count True \
+    --use_pseudo True \
+    --dual_quaternions False \
+    --positive_quaternions True \

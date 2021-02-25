@@ -41,14 +41,36 @@ flags.DEFINE_string(
     None,
     "Nonlinearity to apply to the norm of the lie algebra elements. Supported are None/tanh",
 )
+flags.DEFINE_boolean(
+    "use_pseudo_lift", False, "Is valible, use the alternative pseudo lift method"
+)
+flags.DEFINE_boolean(
+    "dual_quaternions",
+    False,
+    "If using SE3, chose if to use dual quaternion rep, or single quaternion plus 3 vec",
+)
+flags.DEFINE_boolean(
+    "positive_quaternions",
+    False,
+    "If using quaternion rotations, limit the real part to be positive",
+)
 
 
 def load(config, **unused_kwargs):
 
     if config.group == "SE3":
-        group = SE3(0.2)
+        group = SE3(
+            0.2,
+            use_pseudo=config.use_pseudo_lift,
+            positive_quaternions=config.positive_quaternions,
+            dual_quaternions=config.dual_quaternions,
+        )
     elif config.group == "SO3":
-        group = SO3(0.2)
+        group = SO3(
+            0.2,
+            use_pseudo=config.use_pseudo_lift,
+            positive_quaternions=config.positive_quaternions,
+        )
     elif config.group == "T3":
         group = T(3)
     elif config.group == "Trivial3":

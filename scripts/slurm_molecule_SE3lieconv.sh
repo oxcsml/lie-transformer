@@ -33,5 +33,8 @@ python scripts/train_molecule.py \
     --channels 1536 \
     --task $task \
     --group SE3 \
+    --use_pseudo True \
+    --dual_quaternions False \
+    --positive_quaternions True \
     # --lie_algebra_nonlinearity tanh \
     # --parameter_count True \
