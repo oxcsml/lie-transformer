@@ -32,6 +32,12 @@ in particular the use of their group classes.
 """
 
 
+def _lambda_index_1(x):
+    """Lambda fns do not pickle and thus cannot be saved by pytorch; this is
+    a standin for of lambda x: x[1]"""
+    return x[1]
+
+
 class EquivairantMultiheadAttention(nn.Module):
     def __init__(
         self,
@@ -374,44 +380,32 @@ class EquivariantTransformerBlock(nn.Module):
         self.mlp = MLP(dim, dim, dim, 2, kernel_act, kernel_norm == "batch")
 
         if block_norm == "none":
-            self.attention_function = lambda inpt: inpt[1] + self.ema(inpt)[1]
-            self.mlp_function = lambda inpt: inpt[1] + self.mlp(inpt)[1]
+            self.attention_function = self._lambda_none_ema
+            self.mlp_function = self._lambda_none_mlp
         elif block_norm == "layer_pre":
             self.ln_ema = nn.LayerNorm(dim)
             self.ln_mlp = nn.LayerNorm(dim)
 
-            self.attention_function = (
-                lambda inpt: inpt[1]
-                + self.ema((inpt[0], self.ln_ema(inpt[1]), inpt[2]))[1]
-            )
-            self.mlp_function = (
-                lambda inpt: inpt[1]
-                + self.mlp((inpt[0], self.ln_mlp(inpt[1]), inpt[2]))[1]
-            )
+            self.attention_function = self._lambda_layer_pre_ema
+            self.mlp_function = self._lambda_layer_pre_mlp
         elif block_norm == "layer_post":
             self.ln_ema = nn.LayerNorm(dim)
             self.ln_mlp = nn.LayerNorm(dim)
 
-            self.attention_function = lambda inpt: inpt[1] + self.ln_ema(
-                self.ema(inpt)[1]
-            )
-            self.mlp_function = lambda inpt: inpt[1] + self.ln_mlp(self.mlp(inpt)[1])
+            self.attention_function = self._lambda_layer_post_ema
+            self.mlp_function = self._lambda_layer_post_mlp
         elif block_norm == "batch_pre":
             self.bn_ema = MaskBatchNormNd(dim)
             self.bn_mlp = MaskBatchNormNd(dim)
 
-            self.attention_function = (
-                lambda inpt: inpt[1] + self.ema(self.bn_ema(inpt))[1]
-            )
-            self.mlp_function = lambda inpt: inpt[1] + self.mlp(self.bn_mlp(inpt))[1]
+            self.attention_function = self._lambda_batch_pre_ema
+            self.mlp_function = self._lambda_batch_pre_mlp
         elif block_norm == "batch_post":
             self.bn_ema = MaskBatchNormNd(dim)
             self.bn_mlp = MaskBatchNormNd(dim)
 
-            self.attention_function = (
-                lambda inpt: inpt[1] + self.bn_ema(self.ema(inpt))[1]
-            )
-            self.mlp_function = lambda inpt: inpt[1] + self.bn_mlp(self.mlp(inpt))[1]
+            self.attention_function = self._lambda_batch_post_ema
+            self.mlp_function = self._lambda_batch_post_mlp
         else:
             raise ValueError(f"{block_norm} is invalid block norm type.")
 
@@ -420,6 +414,37 @@ class EquivariantTransformerBlock(nn.Module):
         inpt[1] = self.mlp_function(inpt)
 
         return inpt
+    
+    # Lambda fns cannot be saved by pytorch:
+    def _lambda_none_ema(self, inpt):
+        return inpt[1] + self.ema(inpt)[1]
+
+    def _lambda_none_mlp(self, inpt):
+        return inpt[1] + self.mlp(inpt)[1]
+
+    def _lambda_layer_pre_ema(self, inpt):
+        return inpt[1] + self.ema((inpt[0], self.ln_ema(inpt[1]), inpt[2]))[1]
+
+    def _lambda_layer_pre_mlp(self, inpt):
+        return inpt[1] + self.mlp((inpt[0], self.ln_mlp(inpt[1]), inpt[2]))[1]
+
+    def _lambda_layer_post_ema(self, inpt):
+        return inpt[1] + self.ln_ema(self.ema(inpt)[1])
+
+    def _lambda_layer_post_mlp(self, inpt):
+        return inpt[1] + self.ln_mlp(self.mlp(inpt)[1])
+
+    def _lambda_batch_pre_ema(self, inpt):
+        return inpt[1] + self.ema(self.bn_ema(inpt))[1]
+
+    def _lambda_batch_pre_mlp(self, inpt):
+        return inpt[1] + self.mlp(self.bn_mlp(inpt))[1]
+
+    def _lambda_batch_post_ema(self, inpt):
+        return inpt[1] + self.bn_ema(self.ema(inpt))[1]
+
+    def _lambda_batch_post_mlp(self, inpt):
+        return inpt[1] + self.bn_mlp(self.mlp(inpt))[1]
 
 
 class GlobalPool(nn.Module):
@@ -542,7 +567,7 @@ class EquivariantTransformer(nn.Module):
                 ],
                 GlobalPool(mean=global_pool_mean)
                 if global_pool
-                else Expression(lambda x: x[1]),
+                else Expression(_lambda_index_1),
                 nn.Sequential(
                     norm1,
                     activation_fn[kernel_act](),
@@ -589,7 +614,7 @@ class EquivariantTransformer(nn.Module):
                 ),
                 GlobalPool(mean=global_pool_mean)
                 if global_pool
-                else Expression(lambda x: x[1]),
+                else Expression(_lambda_index_1),
             )
         else:
             raise ValueError(f"{architecture} is not a valid architecture.")
