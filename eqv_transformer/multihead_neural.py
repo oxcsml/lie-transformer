@@ -4,7 +4,7 @@ from collections import OrderedDict
 import torch
 from torch import nn
 
-from lie_conv.lieConv import Swish
+from eqv_transformer.utils import Swish
 from lie_conv.masked_batchnorm import MaskBatchNormNd
 from lie_conv.utils import Pass
 
