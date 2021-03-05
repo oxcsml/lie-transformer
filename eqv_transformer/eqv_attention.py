@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from einops.einops import rearrange, reduce
 
 from lie_conv.lieGroups import SE3
-from lie_conv.lieConv import Swish
+from eqv_transformer.utils import Swish
 from lie_conv.utils import Pass, Expression
 from lie_conv.masked_batchnorm import MaskBatchNormNd
 from eqv_transformer.multihead_neural import (
