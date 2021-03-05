@@ -48,5 +48,11 @@ class GlobalPool(nn.Module):
         return summed
 
 
-def Swish():
-    return Expression(lambda x: x * torch.sigmoid(x))
+class Swish(nn.Module):
+    """Swish activation function"""
+    def __init__(self):
+        super(Swish, self).__init__()
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        return x * self.sigmoid(x)
