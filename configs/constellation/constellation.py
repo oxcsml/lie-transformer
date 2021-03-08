@@ -260,7 +260,7 @@ def load(config):
             keys=["corners", "presence", "pattern_class_count"],
         )
         
-    if config.naug > = 2 and tf.io.gfile.exists(test_path):
+    if config.naug >= 2 and tf.io.gfile.exists(test_path):
         print('Successfully reloaded test set')
         print(test_path)
         with tf.io.gfile.GFile(test_path, "rb") as f:
