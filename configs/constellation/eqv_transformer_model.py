@@ -2,7 +2,7 @@ import torch
 
 from eqv_transformer.classfier import Classifier
 from eqv_transformer.eqv_attention import EquivariantTransformer
-from lie_conv.lieGroups import SE3, SE2, SO3, T, Trivial
+from lie_conv.lieGroups import SE3, SE2, SO3, T, Trivial, SE2_SZ_implementation
 
 # from lie_conv.datasets import SE3aug
 
@@ -106,16 +106,18 @@ def load(config, **unused_kwargs):
 
     if config.group == "SE3":
         group = SE3(0.2)
-    if config.group == "SE2":
-        group = SE2(0.2)
     elif config.group == "SO3":
         group = SO3(0.2)
-    elif config.group == "T3":
-        group = T(3)
     elif config.group == "T2":
         group = T(2)
+    elif config.group == "T3":
+        group = T(3)
     elif config.group == "Trivial3":
         group = Trivial(3)
+    if config.group == "SE2":
+        group = SE2(0.2, debug_config=config.debug_group_config, nsamples=config.lift_samples)
+    elif config.group == "SE2_SZ":
+        group = SE2_SZ_implementation(0.2)
     else:
         raise ValueError(f"{config.group} is and invalid group")
 
