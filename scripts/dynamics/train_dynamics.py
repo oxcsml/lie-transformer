@@ -9,6 +9,8 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 torch.manual_seed(0)
 
+# torch.autograd.set_detect_anomaly(True)
+
 import forge
 from forge import flags
 import forge.experiment_tools as fet
@@ -17,6 +19,7 @@ import deepdish as dd
 from tqdm import tqdm
 from itertools import chain
 from lie_conv.hamiltonian import EuclideanK, SpringV, SpringH, HamiltonianDynamics
+from types import SimpleNamespace
 
 
 from eqv_transformer.train_tools import (
@@ -42,8 +45,8 @@ from eqv_transformer.train_tools import (
 # def plot_grad_flow(named_parameters, save_dir):
 #     '''Plots the gradients flowing through different layers in the net during training.
 #     Can be used for checking for possible gradient vanishing / exploding problems.
-    
-#     Usage: Plug this function in Trainer class after loss.backwards() as 
+
+#     Usage: Plug this function in Trainer class after loss.backwards() as
 #     "plot_grad_flow(self.model.named_parameters())" to visualize the gradient flow'''
 #     start_time = time.time()
 #     with torch.no_grad():
@@ -129,15 +132,26 @@ flags.DEFINE_float("beta2", 0.999, "Adam Beta 2 parameter")
 flags.DEFINE_string(
     "lr_schedule", "cosine_annealing", "Learning rate schedule."
 )  # TODO: need to match LieConv one. currently using PyTorch one, is it the same?
-flags.DEFINE_boolean("clip_grad_norm", False, 'Clip norm of the gradient at max_grad_norm.')
-flags.DEFINE_integer("max_grad_norm", 100, "Maximum norm of gradient when clip_grad_norm is True.")
+flags.DEFINE_boolean(
+    "clip_grad_norm", False, "Clip norm of the gradient at max_grad_norm."
+)
+flags.DEFINE_integer(
+    "max_grad_norm", 100, "Maximum norm of gradient when clip_grad_norm is True."
+)
 
 # GPU device
 flags.DEFINE_integer("device", 0, "GPU to use.")
 
 # Debug mode tracks more stuff
 flags.DEFINE_boolean("debug", True, "Track and show on tensorboard more metrics.")
-flags.DEFINE_boolean("kill_if_poor", False, "Kills run if loss is poor. Exact params to be set below.")
+flags.DEFINE_boolean(
+    "kill_if_poor", False, "Kills run if loss is poor. Exact params to be set below."
+)
+flags.DEFINE_boolean(
+    "save_test_predictions",
+    True,
+    "Makes and saves test predictions on one or more test sets (e.g. 5-step and 100-step predictions) at the end of training.",
+)
 
 #####################################################################################################################
 
@@ -159,7 +173,7 @@ def main():
 
     train_loader = dataloaders["train"]
     test_loader = dataloaders["test"]
-    val_loader = dataloaders['val']
+    val_loader = dataloaders["val"]
 
     # Load model
     model, model_name = fet.load(config.model_config, config)
@@ -173,13 +187,13 @@ def main():
         ("num_heads", "nheads"),
         ("num_layers", "nlayers"),
         ("dim_hidden", "hdim"),
-        ("kernel_dim", "kdim"), 
+        ("kernel_dim", "kdim"),
         ("location_attention", "locatt"),
         ("model_seed", "mseed"),
         ("lr_schedule", "lrsched"),
         ("layer_norm", "ln"),
         ("batch_norm", "bn"),
-        ("k", "k"),
+        ("channel_width", "width"),
         ("attention_fn", "attfn"),
         ("output_mlp_scale", "mlpscale"),
         ("train_epochs", "epochs"),
@@ -190,23 +204,23 @@ def main():
         ("space_dim", "spacedim"),
         ("num_particles", "prtcls"),
         ("n_train", "ntrain"),
+        ("group", "group"),
+        ("lift_samples", "ls"),
+        # ("")
     ]
 
-    run_name = ""#config.run_name
+    run_name = ""  # config.run_name
     for config_param in params_in_run_name:
         attr = config_param[0]
         abbrev = config_param[1]
 
         if hasattr(config, attr):
-            run_name += (abbrev)
+            run_name += abbrev
             run_name += str(getattr(config, attr))
             run_name += "_"
 
     if config.clip_grad_norm:
-        run_name += (
-            "clipnorm"
-            + str(config.max_grad_norm) + "_"
-        )
+        run_name += "clipnorm" + str(config.max_grad_norm) + "_"
 
     results_folder_name = osp.join(
         data_name,
@@ -274,17 +288,32 @@ def main():
     save_checkpoint(checkpoint_name, 0, model, model_opt, loss=0.0)
     print("finished saving model at epoch 0 before training")
 
-    if config.debug and config.model_config == 'configs/dynamics/eqv_transformer_model.py': 
-        model_components = [(0, [], "embedding_layer")] + list(
-            chain.from_iterable(
-                (
-                    (k, [], f"ema_{k}"),
-                    (k, ["ema", "kernel", "location_kernel"], f"ema_{k}_location_kernel"),
-                    (k, ["ema", "kernel", "feature_kernel"], f"ema_{k}_feature_kernel"),
+    if (
+        config.debug
+        and config.model_config == "configs/dynamics/eqv_transformer_model.py"
+    ):
+        model_components = (
+            [(0, [], "embedding_layer")]
+            + list(
+                chain.from_iterable(
+                    (
+                        (k, [], f"ema_{k}"),
+                        (
+                            k,
+                            ["ema", "kernel", "location_kernel"],
+                            f"ema_{k}_location_kernel",
+                        ),
+                        (
+                            k,
+                            ["ema", "kernel", "feature_kernel"],
+                            f"ema_{k}_feature_kernel",
+                        ),
+                    )
+                    for k in range(1, config.num_layers + 1)
                 )
-                for k in range(1, config.num_layers + 1)
             )
-        ) + [(config.num_layers + 2, [], 'output_mlp')] # components to track for debugging 
+            + [(config.num_layers + 2, [], "output_mlp")]
+        )  # components to track for debugging
 
     num_params = param_count(model)
     print(f"Number of model parameters: {num_params}")
@@ -295,9 +324,14 @@ def main():
     total_train_iters = len(train_loader) * config.train_epochs
     iters_per_eval = int(total_train_iters / 100) # evaluate 100 times over the course of training
 
+    assert (
+        config.n_train % min(config.batch_size, config.n_train) == 0
+    ), "Batch size doesn't divide dataset size. Can be problematic for loss computation (see below)."
 
     grad_flows = []
     training_failed = False
+    best_val_loss_so_far = 1e+7
+
     for epoch in tqdm(range(start_epoch, config.train_epochs + 1)):
         model.train()
 
@@ -321,7 +355,9 @@ def main():
             #     plot_grad_flow(model.named_parameters(), osp.join(logdir, "grad_flow.pdf"))
 
             if config.clip_grad_norm:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm, norm_type=1)
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), config.max_grad_norm, norm_type=1
+                )
 
             model_opt.step()
 
@@ -367,8 +403,10 @@ def main():
                             prev_params.items(), curr_params.items()
                         ):
                             assert k_prev == k_curr
-                            if ('tracked' not in k_prev): # ignore batch norm tracking. TODO: should this be ignored? if not, fix!
-                                update_norms.append((v_curr - v_prev).norm(1).item()) 
+                            if (
+                                "tracked" not in k_prev
+                            ):  # ignore batch norm tracking. TODO: should this be ignored? if not, fix!
+                                update_norms.append((v_curr - v_prev).norm(1).item())
                         update_norm = sum(update_norms)
 
                     # gradient norm
@@ -398,12 +436,12 @@ def main():
                     (z0, sys_params, ts), true_zs = data
 
                     z = z0
-                    m = sys_params[...,0] # assume the first component encodes masses
-                    D = z.shape[-1] # of ODE dims, 2*num_particles*space_dim
-                    q = z[:,:D//2].reshape(*m.shape,-1)
+                    m = sys_params[..., 0]  # assume the first component encodes masses
+                    D = z.shape[-1]  # of ODE dims, 2*num_particles*space_dim
+                    q = z[:, : D // 2].reshape(*m.shape, -1)
                     k = sys_params[..., 1]
-                    
-                    V = model.predictor.compute_V((q,sys_params))
+
+                    V = model.predictor.compute_V((q, sys_params))
                     V_true = SpringV(q, k)
 
                     log_tensorboard(
@@ -421,21 +459,29 @@ def main():
 
                     # gradient flow
                     ave_grads = []
-                    max_grads= []
+                    max_grads = []
                     layers = []
                     for n, p in model.named_parameters():
-                        if (p.requires_grad) and (p.grad is not None): # and ("bias" not in n): # SZ: let's track bias grads too
+                        if (p.requires_grad) and (
+                            p.grad is not None
+                        ):  # and ("bias" not in n): # SZ: let's track bias grads too
                             layers.append(n)
                             ave_grads.append(p.grad.abs().mean().item())
                             max_grads.append(p.grad.abs().max().item())
 
-                    grad_flow = {"layers": layers, "ave_grads": ave_grads, "max_grads": max_grads}
+                    grad_flow = {
+                        "layers": layers,
+                        "ave_grads": ave_grads,
+                        "max_grads": max_grads,
+                    }
                     grad_flows.append(grad_flow)
 
                 model.train()
 
             # Logging
-            if train_iter % iters_per_eval == 0 or (train_iter == total_train_iters): #batch_idx % config.evaluate_every == 0:
+            if train_iter % iters_per_eval == 0 or (
+                train_iter == total_train_iters
+            ):  # batch_idx % config.evaluate_every == 0:
                 model.eval()
                 with torch.no_grad():
 
@@ -481,8 +527,10 @@ def main():
 
                     if config.kill_if_poor:
                         if epoch > config.train_epochs * 0.2:
-                            if reports['mse'] > 0.01:
-                                raise RuntimeError(f"Killed run due to poor performance.")
+                            if reports["mse"] > 0.01:
+                                raise RuntimeError(
+                                    f"Killed run due to poor performance."
+                                )
 
                     # repeat for validation data
                     reports = None
@@ -525,6 +573,10 @@ def main():
                         prefix="val",
                     )
 
+                    if report_all_val['mse'][-1] < best_val_loss_so_far:
+                        save_checkpoint(checkpoint_name, f"early_stop", model, model_opt, loss=outputs.loss)
+                        best_val_loss_so_far = report_all_val['mse'][-1] 
+
                 model.train()
 
             train_iter += 1
@@ -547,6 +599,54 @@ def main():
 
     # always save final model
     save_checkpoint(checkpoint_name, train_iter, model, model_opt, loss=outputs.loss)
+
+    if config.save_test_predictions:
+        print("Starting to make model predictions on test sets for *final model*.")
+        for chunk_len in [5, 100]:
+            start_t_preds = time.time()
+            data_config = SimpleNamespace(
+                **{**config.__dict__["__flags"], **{"chunk_len": chunk_len, "batch_size": 500}}
+            )
+            # print(data_config)
+            dataloaders, data_name = fet.load(config.data_config, config=data_config)
+            test_loader_preds = dataloaders["test"]
+
+            torch.cuda.empty_cache()
+            with torch.no_grad():
+                preds = []
+                true = []
+                num_datapoints = 0
+                for idx, d in enumerate(test_loader_preds):
+                    true.append(d[-1])
+                    d = nested_to(d, device, torch.float32)
+                    # print(d[-1].shape)
+                    outputs = model(d)
+
+                    pred_zs = outputs.prediction
+                    # (z0, sys_params, ts), true_zs = d
+                    preds.append(pred_zs)
+
+                    num_datapoints += len(pred_zs)
+
+                    if num_datapoints >= 2000:
+                        break
+
+                preds = torch.cat(preds, dim=0).cpu()
+                true = torch.cat(true, dim=0).cpu()
+
+                save_dir = osp.join(
+                    logdir, f"traj_preds_{chunk_len}_steps_2k_test.pt"
+                )
+                torch.save(preds, save_dir)
+
+                save_dir = osp.join(
+                    logdir, f"traj_true_{chunk_len}_steps_2k_test.pt"
+                )
+                torch.save(true, save_dir)
+
+                print(
+                    f"Completed making test predictions for chunk_len = {chunk_len} in {time.time() - start_t_preds:.2f} seconds."
+                )
 
 
 if __name__ == "__main__":
