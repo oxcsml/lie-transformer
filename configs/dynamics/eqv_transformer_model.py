@@ -3,7 +3,7 @@ import torch
 from eqv_transformer.eqv_attention import EquivariantTransformer
 from lie_conv.dynamicsTrainer import HNet
 from lie_conv.hamiltonian import HamiltonianDynamics
-from lie_conv.lieGroups import T
+from lie_conv.lieGroups import T, SE2, SE2_SZ_implementation, SO2
 from eqv_transformer.dynamics_predictor import DynamicsPredictor
 
 from forge import flags
@@ -30,7 +30,7 @@ flags.DEFINE_integer(
 )
 flags.DEFINE_integer("model_seed", 0, "Model rng seed")
 flags.DEFINE_string(
-    "attention_fn", "norm_exp", "How to form the attention weights from the 'logits'."
+    "attention_fn", "dot_product", "How to form the attention weights from the 'logits'."
 )
 
 flags.DEFINE_string(
@@ -74,6 +74,12 @@ def load(config, **unused_kwargs):
         group = T(2)
     elif config.group == "T(3)":
         group = T(3)
+    elif config.group == "SE(2)":
+        group = SE2()
+    elif config.group == "SE(2)_SZ":
+        group = SE2_SZ_implementation()
+    elif config.group == "SO(2)":
+        group = SO2()
     else:
         raise NotImplementedError(f"Group {config.group} is not implemented.")
 
