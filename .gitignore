@@ -126,6 +126,8 @@ sheh_scripts/
 outputs/
 datasets/
 forge_
+venv_after_update/
+wandb/
 
 # michael stuff
 scripts/ablations
