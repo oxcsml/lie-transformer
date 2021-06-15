@@ -17,18 +17,18 @@ activation_fn = {
 
 
 class MultiheadLinear(nn.Module):
-    """ Layer to perform n_heads MLPs in parallel for multihead kernels
+    """Layer to perform n_heads MLPs in parallel for multihead kernels
 
-        Parameters
-        ----------
-        n_heads : int
-            number of heads
-        c_in : int
-            input dimension
-        c_out : int
-            output dimension
-        bias : bool, optional
-            use a bias parameter, by default True
+    Parameters
+    ----------
+    n_heads : int
+        number of heads
+    c_in : int
+        input dimension
+    c_out : int
+        output dimension
+    bias : bool, optional
+        use a bias parameter, by default True
     """
 
     def __init__(self, n_heads, c_in, c_out, bias=True):

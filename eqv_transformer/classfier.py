@@ -23,26 +23,21 @@ class Classifier(nn.Module):
 
         o = AttrDict()
 
+        # compute model forward pass
         if isinstance(inpt, (list, tuple)):
             o.logits = self.encoder(*inpt)
         else:
             o.logits = self.encoder(inpt)
 
+        # compute the predicted classes
         _, o.predicted = torch.max(o.logits, -1)
 
         if label is not None:
             label = label.long()
 
-            # import pdb;
-            # pdb.set_trace()
             o.loss = F.cross_entropy(o.logits.transpose(1, 2), label)
-            # import pdb;
-            # pdb.set_trace()
             o.acc = o.predicted.eq(label).float().mean(())
 
-        o.reports = AttrDict({
-            'loss': o.loss,
-            'acc': o.acc
-        })
+        o.reports = AttrDict({"loss": o.loss, "acc": o.acc})
 
         return o

@@ -5,6 +5,11 @@ import torch.nn.functional as F
 import math
 
 
+"""
+Code in this file is a reimplementation of the Set Transformer from https://arxiv.org/abs/1810.00825
+"""
+
+
 class MultiheadAttentionBlock(nn.Module):
     def __init__(self, dim_Q, dim_K, dim_V, num_heads, ln=False):
         super(MultiheadAttentionBlock, self).__init__()
@@ -22,7 +27,6 @@ class MultiheadAttentionBlock(nn.Module):
         queries = self.fc_q(queries)
         keys, values = self.fc_k(keys), self.fc_v(keys)
 
-
         dim_split = self.dim_V // self.num_heads
         Q_ = torch.cat(queries.split(dim_split, 2), 0)
         K_ = torch.cat(keys.split(dim_split, 2), 0)
@@ -34,18 +38,18 @@ class MultiheadAttentionBlock(nn.Module):
         inf = torch.tensor(1e38, dtype=torch.float32, device=queries.device)
         if presence_q is not None:
             presence_q = presence_q.repeat(self.num_heads, 1).unsqueeze(-1)
-            logits = presence_q * logits - (1. - presence_q) * inf
+            logits = presence_q * logits - (1.0 - presence_q) * inf
 
         if presence_k is not None:
             presence_k = presence_k.repeat(self.num_heads, 1).unsqueeze(-2)
-            logits = presence_k * logits - (1. - presence_k) * inf
+            logits = presence_k * logits - (1.0 - presence_k) * inf
 
         A = torch.softmax(logits, 2)
 
         O = torch.cat((Q_ + A.bmm(V_)).split(queries.size(0), 0), 2)
-        O = O if getattr(self, 'ln0', None) is None else self.ln0(O)
+        O = O if getattr(self, "ln0", None) is None else self.ln0(O)
         O = O + F.relu(self.fc_o(O))
-        O = O if getattr(self, 'ln1', None) is None else self.ln1(O)
+        O = O if getattr(self, "ln1", None) is None else self.ln1(O)
         return O
 
 
@@ -60,6 +64,7 @@ class SelfattentionBlock(nn.Module):
 
 class InducedSelfAttentionBlock(nn.Module):
     """Like self-attention block, but uses inducing points to reduce computation complexity."""
+
     def __init__(self, dim_in, dim_out, num_heads, num_inds, ln=False):
         super(InducedSelfAttentionBlock, self).__init__()
         self.I = nn.Parameter(torch.Tensor(1, num_inds, dim_out))
@@ -84,7 +89,6 @@ class MultiheadAttentionPooling(nn.Module):
 
 
 class InputWrapper(nn.Module):
-
     def __init__(self, module):
         super().__init__()
         self.module = module
@@ -99,9 +103,18 @@ class InputWrapper(nn.Module):
 class SetTransformer(nn.Module):
     """Builds a Set Transformer."""
 
-    def __init__(self, dim_input, num_outputs, dim_output,
-                 n_enc_layers=2, n_dec_layers=2,
-                 dim_hidden=128, num_heads=4, num_inducing_points=0, ln=False):
+    def __init__(
+        self,
+        dim_input,
+        num_outputs,
+        dim_output,
+        n_enc_layers=2,
+        n_dec_layers=2,
+        dim_hidden=128,
+        num_heads=4,
+        num_inducing_points=0,
+        ln=False,
+    ):
         """Build the module.
 
         Args:
@@ -114,27 +127,41 @@ class SetTransformer(nn.Module):
             num_heads: int, number of attention heads.
             num_inducing_points: int, uses inducing points if > 0.
             ln: bool, uses Layer Normalization if True.
+
+        Model introduced in Set Transformer: A Framework for Attention-based Permutation-Invariant Neural Networks https://arxiv.org/abs/1810.00825
         """
 
         super(SetTransformer, self).__init__()
 
         if num_inducing_points > 0:
-            enc_layer_class = functools.partial(InducedSelfAttentionBlock, num_inds=num_inducing_points)
+            enc_layer_class = functools.partial(
+                InducedSelfAttentionBlock, num_inds=num_inducing_points
+            )
         else:
             enc_layer_class = SelfattentionBlock
 
-        enc_layers = [InputWrapper(enc_layer_class(dim_input, dim_hidden, num_heads, ln=ln))]
+        enc_layers = [
+            InputWrapper(enc_layer_class(dim_input, dim_hidden, num_heads, ln=ln))
+        ]
         for _ in range(n_enc_layers - 1):
-            enc_layers.append(InputWrapper(enc_layer_class(dim_hidden, dim_hidden, num_heads, ln=ln)))
+            enc_layers.append(
+                InputWrapper(enc_layer_class(dim_hidden, dim_hidden, num_heads, ln=ln))
+            )
 
         self.enc_layers = nn.ModuleList(enc_layers)
         # self.enc = enc_layers[0]
 
-        self.pooling_layer = InputWrapper(MultiheadAttentionPooling(dim_hidden, num_heads, num_outputs, ln=ln)) 
+        self.pooling_layer = InputWrapper(
+            MultiheadAttentionPooling(dim_hidden, num_heads, num_outputs, ln=ln)
+        )
 
         dec_layers = []
         for _ in range(n_dec_layers):
-            dec_layers.append(InputWrapper(SelfattentionBlock(dim_hidden, dim_hidden, num_heads, ln=ln)))
+            dec_layers.append(
+                InputWrapper(
+                    SelfattentionBlock(dim_hidden, dim_hidden, num_heads, ln=ln)
+                )
+            )
         dec_layers.append(InputWrapper(nn.Linear(dim_hidden, dim_output)))
 
         self.dec_layers = nn.ModuleList(dec_layers)

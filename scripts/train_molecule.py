@@ -222,9 +222,9 @@ def main():
         print("============================================================")
         # from torchsummary import summary
 
-        data = next(iter(dataloaders["train"]))
+        # data = next(iter(dataloaders["train"]))
 
-        data = {k: v.to(device) for k, v in data.items()}
+        # data = {k: v.to(device) for k, v in data.items()}
         # print(
         #     summary(
         #         model.predictor,
