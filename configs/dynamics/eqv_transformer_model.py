@@ -3,7 +3,7 @@ import torch
 from eqv_transformer.eqv_attention import EquivariantTransformer
 from lie_conv.dynamicsTrainer import HNet
 from lie_conv.hamiltonian import HamiltonianDynamics
-from lie_conv.lieGroups import T, SE2, SE2_SZ_implementation, SO2
+from lie_conv.lieGroups import T, SE2, SE2_canonical, SO2
 from eqv_transformer.dynamics_predictor import DynamicsPredictor
 
 from forge import flags
@@ -77,8 +77,8 @@ def load(config, **unused_kwargs):
         group = T(3)
     elif config.group == "SE(2)":
         group = SE2()
-    elif config.group == "SE(2)_SZ":
-        group = SE2_SZ_implementation()
+    elif config.group == "SE(2)_canonical":
+        group = SE2_canonical()
     elif config.group == "SO(2)":
         group = SO2()
     else:
