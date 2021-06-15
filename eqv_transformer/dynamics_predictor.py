@@ -12,11 +12,12 @@ from lie_conv.hamiltonian import SpringV, SpringH, HamiltonianDynamics, KeplerV,
 class DynamicsPredictor(nn.Module):
     """This class implements forward pass through our model, including loss computation."""
 
-    def __init__(self, predictor, debug=False, task="spring"):
+    def __init__(self, predictor, debug=False, task="spring", model_with_dict=True):
         super().__init__()
         self.predictor = predictor
         self.debug = debug
         self.task = task
+        self.model_with_dict = model_with_dict
 
         if self.debug:
             print("DynamicsPredictor is in DEBUG MODE.")
@@ -104,5 +105,8 @@ class DynamicsPredictor(nn.Module):
             o.reports = AttrDict({"mse": o.mse, "mse_V": o.mse_V, "mse_dyn": o.mse_dyn})
         else:
             o.reports = AttrDict({"mse": o.mse})
+
+        if not self.model_with_dict:
+            return pred_zs
 
         return o
