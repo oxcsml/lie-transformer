@@ -40,8 +40,12 @@ flags.DEFINE_string("output_norm", "none", "Normalization to use in final output
 flags.DEFINE_string("kernel_norm", "none", "Normalization to use in kernel MLP.")
 flags.DEFINE_string("kernel_type", "mlp", "Attention kernel type.")
 flags.DEFINE_string("architecture", "model_1", "Overall model architecture.")
-# flags.DEFINE_string("attention_fn", "softmax", "How to form attention weights.")
-# flags.DEFINE_float("output_mlp_scale", 1., "Scale the weights of the final MLP layers (to have a sufficiently large output to match input).")
+flags.DEFINE_boolean(
+    "model_with_dict",
+    True,
+    "Makes model output predictions directly instead of a dictionary."
+)
+
 
 
 class DynamicsEquivariantTransformer(EquivariantTransformer, HNet):
@@ -67,9 +71,6 @@ class DynamicsEquivariantTransformer(EquivariantTransformer, HNet):
 
 
 def load(config, **unused_kwargs):
-
-    # print('HARD CODED A default false loc att. REMOVE')
-
     if config.group == "T(2)":
         group = T(2)
     elif config.group == "T(3)":
@@ -91,7 +92,6 @@ def load(config, **unused_kwargs):
         dim_hidden=config.dim_hidden,
         num_layers=config.num_layers,
         num_heads=config.num_heads,
-        # layer_norm=config.layer_norm,
         global_pool=True,
         global_pool_mean=config.mean_pooling,
         liftsamples=config.lift_samples,
@@ -103,7 +103,6 @@ def load(config, **unused_kwargs):
         kernel_type=config.kernel_type,
         architecture=config.architecture,
         attention_fn=config.attention_fn,
-        # output_mlp_scale=config.output_mlp_scale,
     )
 
     if config.data_config == "configs/dynamics/nbody_dynamics_data.py":
@@ -111,8 +110,6 @@ def load(config, **unused_kwargs):
     elif config.data_config == "configs/dynamics/spring_dynamics_data.py":
         task = "spring"
 
-    dynamics_predictor = DynamicsPredictor(network, debug=config.debug, task=task)
-
-    # print(list(network.parameters())[0][:2])
+    dynamics_predictor = DynamicsPredictor(network, debug=config.debug, task=task, model_with_dict=config.model_with_dict)
 
     return dynamics_predictor, "EqvTransformer_Dynamics"
