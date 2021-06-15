@@ -105,10 +105,10 @@ def load(config, **unused_kwargs):
         attention_fn=config.attention_fn,
     )
 
-    if config.data_config == "configs/dynamics/nbody_dynamics_data.py":
-        task = "nbody"
-    elif config.data_config == "configs/dynamics/spring_dynamics_data.py":
+    if config.data_config == "configs/dynamics/spring_dynamics_data.py":
         task = "spring"
+    else:
+        raise NotImplementedError("Unsure which task is being run.")
 
     dynamics_predictor = DynamicsPredictor(network, debug=config.debug, task=task, model_with_dict=config.model_with_dict)
 
