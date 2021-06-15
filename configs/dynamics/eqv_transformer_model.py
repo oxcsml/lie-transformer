@@ -11,7 +11,7 @@ from forge import flags
 flags.DEFINE_string("group", "T(2)", "Group to be invariant to.")
 
 
-flags.DEFINE_integer("dim_hidden", 256, "Dimension of features to use in each layer")
+flags.DEFINE_integer("dim_hidden", 160, "Dimension of features to use in each layer")
 flags.DEFINE_string(
     "activation_function", "swish", "Activation function to use in the network"
 )

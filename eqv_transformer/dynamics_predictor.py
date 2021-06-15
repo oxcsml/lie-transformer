@@ -66,34 +66,6 @@ class DynamicsPredictor(nn.Module):
 
                     mse_dyn = (dyn_tz_true - dyn_tz_pred).pow(2).mean()
 
-            if self.task == "nbody":
-                # currently a bit inefficient to do the below?
-                with torch.no_grad():
-                    (z0, sys_params, ts), true_zs = data
-
-                    z = z0
-                    m = sys_params[..., 0]  # assume the first component encodes masses
-                    D = z.shape[-1]  # of ODE dims, 2*num_particles*space_dim
-                    q = z[:, : D // 2].reshape(*m.shape, -1)
-                    p = z[:, D // 2 :].reshape(*m.shape, -1)
-                    V_pred = self.predictor.compute_V((q, sys_params))
-
-                    V_true = KeplerV(q, m)
-
-                    mse_V = (V_pred - V_true).pow(2).mean()
-
-                    # dynamics
-                    dyn_tz_pred = self.predictor(ts, z0, sys_params)
-
-                    H = lambda t, z: KeplerH(
-                        z, sys_params[..., 0].squeeze(-1)
-                    )
-                    dynamics = HamiltonianDynamics(H, wgrad=False)
-                    dyn_tz_true = dynamics(ts, z0)
-
-                    mse_dyn = (dyn_tz_true - dyn_tz_pred).pow(2).mean()
-
-
             o.mse_dyn = mse_dyn
             o.mse_V = mse_V
 
