@@ -71,6 +71,11 @@ flags.DEFINE_integer(
     "frequency with which to save checkpoints, in number of epoches.",
 )
 flags.DEFINE_boolean("log_train_values", True, "Logs train values if True.")
+flags.DEFINE_integer(
+    "total_evaluations",
+    100,
+    "Maximum number of evaluations on test and validation data during training.",
+)
 
 # Optimization
 flags.DEFINE_integer("train_epochs", 200, "Maximum number of training epochs.")
@@ -94,6 +99,26 @@ flags.DEFINE_boolean(
     "log_val_test", True, "Turns off computation of validation and test errors."
 )
 #####################################################################################################################
+
+
+def evaluate(model, loader, device):
+    reports = None
+    for data in loader:
+        data = nested_to(data, device, torch.float32)
+        outputs = model(data)
+
+        if reports is None:
+            reports = {k: v.detach().clone().cpu() for k, v in outputs.reports.items()}
+        else:
+            for k, v in outputs.reports.items():
+                reports[k] += v.detach().clone().cpu()
+
+    for k, v in reports.items():
+        reports[k] = v / len(
+            loader
+        )  # SZ: note this can be slightly incorrect if mini-batch sizes vary (if batch_size doesn't divide train_size), but approximately correct.
+
+    return reports
 
 
 # @forge.debug_on(Exception)
@@ -221,15 +246,12 @@ def main():
     start_t = time.time()
 
     total_train_iters = len(train_loader) * config.train_epochs
-    iters_per_eval = int(
-        total_train_iters / 100
-    )  # evaluate 100 times over the course of training
+    iters_per_eval = max(1, int(total_train_iters / config.total_evaluations))
 
     assert (
         config.n_train % min(config.batch_size, config.n_train) == 0
     ), "Batch size doesn't divide dataset size. Can be inaccurate for loss computation (see below)."
 
-    grad_flows = []
     training_failed = False
     best_val_loss_so_far = 1e7
 
@@ -286,32 +308,13 @@ def main():
             if config.lr_schedule == "cosine_annealing_warmup":
                 scheduler.step()
 
-            # Logging
+            # Logging and evaluation
             if (
                 train_iter % iters_per_eval == 0 or (train_iter == total_train_iters)
             ) and config.log_val_test:  # batch_idx % config.evaluate_every == 0:
                 model.eval()
                 with torch.no_grad():
-
-                    reports = None
-                    for data in test_loader:
-                        data = nested_to(data, device, torch.float32)
-                        outputs = model(data)
-
-                        if reports is None:
-                            reports = {
-                                k: v.detach().clone().cpu()
-                                for k, v in outputs.reports.items()
-                            }
-                        else:
-                            for k, v in outputs.reports.items():
-                                reports[k] += v.detach().clone().cpu()
-
-                    for k, v in reports.items():
-                        reports[k] = v / len(
-                            test_loader
-                        )  # SZ: note this can be slightly incorrect if mini-batch sizes vary (if batch_size doesn't divide train_size), but approximately correct.
-
+                    reports = evaluate(model, test_loader, device)
                     reports = parse_reports(reports)
                     reports["time"] = time.time() - start_t
                     if report_all == {}:
@@ -334,23 +337,7 @@ def main():
                     )
 
                     # repeat for validation data
-                    reports = None
-                    for data in val_loader:
-                        data = nested_to(data, device, torch.float32)
-                        outputs = model(data)
-
-                        if reports is None:
-                            reports = {
-                                k: v.detach().clone().cpu()
-                                for k, v in outputs.reports.items()
-                            }
-                        else:
-                            for k, v in outputs.reports.items():
-                                reports[k] += v.detach().clone().cpu()
-
-                    for k, v in reports.items():
-                        reports[k] = v / len(val_loader)
-
+                    reports = evaluate(model, val_loader, device)
                     reports = parse_reports(reports)
                     reports["time"] = time.time() - start_t
                     if report_all_val == {}:
@@ -386,7 +373,7 @@ def main():
 
             train_iter += 1
 
-        # Do learning rate schedule steps per EPOCH for cosine_annealing
+        # Do learning rate schedule steps per *epoch* for cosine_annealing
         if config.lr_schedule == "cosine_annealing":
             scheduler.step()
 
@@ -394,9 +381,6 @@ def main():
             save_checkpoint(
                 checkpoint_name, train_iter, model, model_opt, loss=outputs.loss
             )
-
-        if config.debug:
-            dd.io.save(logdir + "/grad_flows.h5", grad_flows)
 
         dd.io.save(logdir + "/results_dict_train.h5", train_reports)
         dd.io.save(logdir + "/results_dict.h5", report_all)
