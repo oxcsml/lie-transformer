@@ -56,7 +56,7 @@ flags.DEFINE_string(
 # Job management
 flags.DEFINE_string(
     "run_name",
-    "test_graph",
+    "test_run",
     "Name of this job and name of results folder.",
 )
 flags.DEFINE_boolean("resume", False, "Tries to resume a job if True.")
@@ -89,7 +89,7 @@ flags.DEFINE_string("lr_schedule", "cosine_annealing", "Learning rate schedule."
 flags.DEFINE_integer("device", 0, "GPU to use.")
 
 # Debug mode tracks more stuff
-flags.DEFINE_boolean("debug", True, "Track and show on tensorboard more metrics.")
+flags.DEFINE_boolean("debug", False, "Track and show on tensorboard more metrics.")
 flags.DEFINE_boolean(
     "save_test_predictions",
     True,

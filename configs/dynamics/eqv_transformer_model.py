@@ -22,7 +22,7 @@ flags.DEFINE_boolean(
 )
 flags.DEFINE_integer("num_heads", 8, "Number of attention heads in each layer")
 flags.DEFINE_integer("kernel_dim", 16, "Hidden layer size to use in kernel MLPs")
-flags.DEFINE_integer("num_layers", 4, "Number of ResNet layers to use")
+flags.DEFINE_integer("num_layers", 5, "Number of ResNet layers to use")
 flags.DEFINE_integer(
     "lift_samples",
     1,
@@ -43,7 +43,7 @@ flags.DEFINE_string("architecture", "model_1", "Overall model architecture.")
 flags.DEFINE_boolean(
     "model_with_dict",
     True,
-    "Makes model output predictions directly instead of a dictionary."
+    "Makes model output predictions in dictionary instead of directly."
 )
 
 

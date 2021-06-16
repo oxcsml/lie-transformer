@@ -154,7 +154,7 @@ if __name__ == "__main__":
     lift_samples_p = sorted(list(set(lift_samples_p)))
 
     start_time = time.time()
-    inv_errors = analyze_invariance(lift_samples_p, num_runs=2)
+    inv_errors = analyze_invariance(lift_samples_p, num_runs=10)
     print(f"Took {time.time() - start_time:.2f} seconds.")
 
     fig, ax = plt.subplots(figsize=(5 * 0.85, 5 * 0.85))
