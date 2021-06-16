@@ -2,9 +2,11 @@
 
 This repository contains the implementation of the LieTransformer used for experiments in the paper
 
-[LieTransformer: Equivariant self-attention for Lie Groups]()
+[LieTransformer: Equivariant Self-Attention for Lie Groups]()
 
-by [Michael Hutchinson](), [Charline Le Lan](), [Sheheryar Zaidi](), [Emilien Dupont](), [Yee Whye Teh]() and [Hyunjik Kim]()
+by [Michael Hutchinson](https://mjhutchinson.github.io/)\*, [Charline Le Lan](http://csml.stats.ox.ac.uk/people/lelan/)\*, [Sheheryar Zaidi](https://shehzaidi.github.io/)\*, [Emilien Dupont](https://emiliendupont.github.io/), [Yee Whye Teh](https://www.stats.ox.ac.uk/~teh/) and [Hyunjik Kim](https://hyunjik11.github.io/)
+
+\* Equal contribution.
 
 
 Pattern recognition | Molecular property prediction | Particle Dynamics
@@ -86,14 +88,17 @@ python scripts/train_molecule.py \
 ![QM9 results](.github/images/QM9_results.png)
 
 ### Hamiltonian dynamics
-```
-python scripts/dynamics/train_dynamics.py --activation_function swish --architecture model_1 --attention_fn dot_product --batch_size 100 --block_norm layer_pre --dim_hidden 160 --kernel_dim 16 --kernel_type mlp --kill_if_poor False --learning_rate 0.001 --lr_schedule cosine_annealing --model_seed 0 --n_systems 150000 --n_train 3000 --num_heads 8 --num_layers 5 --num_particles 6 --run_name test_run --save_check_points 500 --train_epochs 200
-```
+In this experiment, we aim to predict the trajectory of a number of particles connected together by a series of springs. This is done by learning the Hamiltonian of the system from observed trajectories.
 
+The following command generates a dataset of trajectories and trains LieTransformer on it. Data generation occurs in the first run and can take some time. 
+```
+T(2) default: python scripts/train_dynamics.py
+SE(2) default: python scripts/train_dynamics.py --group 'SE(2)_canonical' --lift_samples 2 --num_layers 3 --dim_hidden 80
+```
 #### Results
 Rollout MSE | Example Trajectories 
 :-------------------------:|:-------------------------:
-![dynamics rollout](.github/images/time_rollout_1e4.png-1.png) | ![trajectories](.github/images/single_traj_n_train_400_steps_100_idx_3_chunk_len_100.png-1.png)
+![dynamics data efficiency](.github/images/data-efficiency-dynamics.png) | ![trajectories](.github/images/single_traj_n_train_400_steps_100_idx_3_chunk_len_100.png-1.png)
 
 ## Contributing
 
